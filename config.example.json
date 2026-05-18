@@ -1,0 +1,48 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8080,
+    "authToken": ""
+  },
+  "discovery": {
+    "enabled": true,
+    "timeoutMs": 4000,
+    "refreshIntervalMs": 300000
+  },
+  "players": [
+    {
+      "name": "livingroom",
+      "host": "192.168.1.50",
+      "uuid": "RINCON_XXXXXXXXXXXXX01400"
+    },
+    {
+      "name": "kitchen",
+      "host": "192.168.1.51"
+    }
+  ],
+  "defaultPlayer": "livingroom",
+  "radioStations": [
+    {
+      "index": 1,
+      "name": "Radio 1",
+      "streamUri": "x-rincon-mp3radio://stream.example.com/radio1.mp3",
+      "metadata": {
+        "title": "Radio 1"
+      }
+    },
+    {
+      "index": 2,
+      "name": "Radio 2",
+      "streamUri": "x-rincon-mp3radio://stream.example.com/radio2.mp3",
+      "metadata": {
+        "title": "Radio 2"
+      }
+    }
+  ],
+  "status": {
+    "pollIntervalMs": 5000
+  },
+  "logging": {
+    "level": "info"
+  }
+}

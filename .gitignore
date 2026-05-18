@@ -1,0 +1,10 @@
+node_modules/
+npm-debug.log
+.env
+config.local.json
+config.json
+*.log
+.DS_Store
+coverage/
+.nyc_output/
+dist/

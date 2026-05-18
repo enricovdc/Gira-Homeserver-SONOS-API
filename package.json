@@ -1,0 +1,28 @@
+{
+  "name": "gira-homeserver-sonos-api",
+  "version": "0.1.0",
+  "description": "HTTP bridge that lets a Gira HomeServer logic module control Sonos players via the local UPnP/SOAP API",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.js",
+    "test:watch": "node --test --watch test/*.test.js",
+    "lint": "node -e \"require('fs').readdirSync('src',{recursive:true}).filter(f=>f.endsWith('.js')).forEach(f=>require('./src/'+f))\" && echo lint-ok"
+  },
+  "keywords": [
+    "gira",
+    "homeserver",
+    "knx",
+    "sonos",
+    "upnp",
+    "logic-module"
+  ],
+  "license": "MIT",
+  "author": "",
+  "dependencies": {},
+  "devDependencies": {}
+}
