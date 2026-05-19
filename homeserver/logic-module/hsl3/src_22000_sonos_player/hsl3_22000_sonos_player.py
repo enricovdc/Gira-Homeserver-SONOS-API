@@ -13,6 +13,7 @@ Inputs / outputs / store / timer keys must match config.json.
 
 import re
 import socket
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -215,6 +216,49 @@ def to_iso_bytes(value):
     return str(value).encode("iso-8859-15", "replace")
 
 
+def _is_ip_literal(value):
+    if not value:
+        return False
+    parts = str(value).split(".")
+    if len(parts) != 4:
+        return False
+    try:
+        return all(0 <= int(p) <= 255 for p in parts)
+    except ValueError:
+        return False
+
+
+def resolve_host_spec(spec):
+    """Map a Host input value to a usable IP address.
+
+    Accepts an IPv4 literal (used as-is), a MAC address, a player name, or
+    a Sonos UUID. The latter three are resolved by asking the Sonos Admin
+    LBS (22002) via its module-level `resolve_host` function — found via
+    sys.modules to avoid a hard import dependency. If no Admin module is
+    loaded, only IP literals work (the old behaviour). Returns '' when
+    resolution fails; the caller treats that as offline.
+    """
+    if not spec:
+        return ""
+    spec = str(spec).strip()
+    if _is_ip_literal(spec):
+        return spec
+    # Try every loaded module whose name looks like the admin module.
+    for mod_name, mod in list(sys.modules.items()):
+        if mod is None:
+            continue
+        if "sonos_admin" in mod_name or "hsl3_22002" in mod_name:
+            resolver = getattr(mod, "resolve_host", None)
+            if callable(resolver):
+                try:
+                    resolved = resolver(spec)
+                    if resolved:
+                        return resolved
+                except Exception:
+                    pass
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Shared NOTIFY HTTP listener (class-level)
 # ---------------------------------------------------------------------------
@@ -310,6 +354,7 @@ class LogicModule:
         self.debug = None
 
         # Per-instance state — survives across on_calc / on_timer cycles.
+        self._host_spec = ""
         self._host = ""
         self._sid_av = ""
         self._sid_rc = ""
@@ -451,7 +496,12 @@ class LogicModule:
     # ----- Config / input reading ------------------------------------------
 
     def _reload_config(self, inputs):
-        self._host = to_str(inputs["Host"].value).strip()
+        self._host_spec = to_str(inputs["Host"].value).strip()
+        # Resolve the spec (IP, MAC, name, UUID) to a current IP via the
+        # admin registry. Falls back to using the spec literally if it
+        # looks like an IP (admin not present).
+        resolved = resolve_host_spec(self._host_spec)
+        self._host = resolved or (self._host_spec if _is_ip_literal(self._host_spec) else "")
         self._vol_step = max(1, int(inputs["VolStep"].value or 2))
         self._poll_interval_s = max(10, int(inputs["PollInterval"].value or 60))
         self._sub_timeout_s = max(60, int(inputs["SubTimeout"].value or 1800))
@@ -609,6 +659,15 @@ class LogicModule:
     # ----- Periodic tick ----------------------------------------------------
 
     def _tick_work(self):
+        # Re-resolve the host on each tick so DHCP renumbering is picked up
+        # automatically when the admin registry refreshes.
+        if self._host_spec:
+            resolved = resolve_host_spec(self._host_spec)
+            if resolved:
+                self._host = resolved
+        if not self._host:
+            return
+
         # Status poll fallback (cheap on LAN).
         ok, body, _err = self._soap("AVTransport", "GetTransportInfo", ENV_GET_TRANSPORT)
         if ok:

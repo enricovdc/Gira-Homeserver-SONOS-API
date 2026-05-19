@@ -94,25 +94,52 @@ for — no separate HTTP layer is needed.
 | Callback base URL | LBS 22000 input `CallbackBase` (E18) | Leave empty for auto-detected `http://<lan-ip>:<listener-port>` |
 | Runtime config edits | Wire any of the inputs above to HS data points that the visualisation can write | Equivalent to the bridge's runtime PUT /api/config |
 
-## What is intentionally NOT in HSL3 (and why)
+## Web admin UI (LBS 22002 Sonos Admin)
 
-These were bridge-internal features whose purpose disappears when the
-integration runs inside the HomeServer's own logic engine:
+The Sonos Admin module brings a runtime web UI back into the HSL3
+integration without re-introducing the legacy external bridge.
 
-- **Standalone web admin UI** — not needed. The Experte logic editor +
-  HomeServer visualisation **is** the admin UI in HSL3. Inputs and
-  outputs are wired and edited natively.
-- **HTTP REST API for external clients** — not needed. KNX, HS logic,
-  visualisation, and Quad-Client are the consumers. None of them
-  speak REST to a sidecar service.
+| Function | HSL3 location | Notes |
+| --- | --- | --- |
+| Web UI served on port 8080 | LBS 22002 (Sonos Admin) | `_start_server` binds with fallback to 8081–8083, then ephemeral. |
+| List discovered + manually-added players | `api_list_players` | `GET /api/players` |
+| Manually add a player (by **IP** and/or **MAC**) | `api_add_player` | `POST /api/players`. Either field is sufficient; MAC is preferred for DHCP environments. |
+| Edit a player's name / IP / MAC | `api_update_player` | `PATCH /api/players/{id}` |
+| Remove a player | `api_remove_player` | `DELETE /api/players/{id}` |
+| Trigger SSDP scan on demand | `api_discover_now` | `POST /api/players/discover` |
+| Periodic SSDP refresh (every 5 min default) | `_run_discovery` via `on_timer` | Tunable via `AutoDiscoverInterval` input |
+| ARP table-based MAC↔IP resolution | `_resolve_mac_for_ip`, `_resolve_ip_for_mac` | Reads `/proc/net/arp` |
+| Global radio-station library | `api_list_stations`, `api_add_station`, `api_update_station`, `api_remove_station` | One station list shared across players. |
+| Sonos Cloud OAuth credentials | `api_get_cloud`, `api_set_cloud` | `clientSecret` never echoed back to UI. |
+| OAuth authorize flow | `_oauth_start` handler | `GET /oauth/start` → 302 to Sonos. |
+| OAuth callback + token exchange | `_oauth_callback` + `oauth_exchange` | `GET /oauth/callback` → POST to Sonos token endpoint → stores tokens. |
+| Cross-LBS host resolution | `resolve_host` module-level helper | LBS 22000 calls this via `sys.modules` lookup. Returns IP for IP / MAC / name / UUID input. |
+| Cross-LBS station lookup | `get_station_uri` | A future LBS variant can pull from the Admin library instead of per-player Station<N>Uri inputs. |
+
+### Why the web UI lives in HSL3, not a separate process
+
+The Admin module uses Python's `http.server` running on a daemon
+thread inside the HSL3 process. The HS firmware allows this — the
+shipped `requests` library, threading, and socket primitives are all
+available. No external Linux service is required. Cloud OAuth is
+handled via the same HTTP server: Sonos redirects browser back to
+`http://<hs-ip>:8080/oauth/callback`, the handler calls
+`requests.post(token_endpoint)` with the client credentials, and
+stores the access + refresh tokens in the class-level registry.
+
+## What is intentionally still NOT in HSL3 (and why)
+
+These bridge-era features remain outside HSL3 because they don't
+serve the in-HomeServer integration model:
+
 - **Outbound webhook to a HS inbound URL** — not needed. The HSL3
-  module **is** the HomeServer; it writes outputs directly. The
-  bridge needed the webhook precisely because it was external.
-- **Server-Sent Events stream** — not needed for the same reason.
-- **Bearer-token auth** — not needed. There is no external HTTP
-  surface to protect; KNX security and HS authentication already
-  govern access to the logic and visualisation.
+  module **is** the HomeServer; it writes outputs directly.
+- **Server-Sent Events stream** — superseded by KNX outputs and the
+  Admin web UI's periodic polling.
+- **Bearer-token auth on the bridge's HTTP API** — the Admin web UI
+  is unauthenticated for now and should remain LAN-only. If you
+  need an external surface, put a reverse proxy with auth in front
+  rather than re-implementing auth inside HSL3.
 
-If any of these functions becomes useful again (e.g. integrating with
-a non-HomeServer external system), they can be added as additional
-LBS modules without changing LBS 22000 / 22001.
+If any of these becomes useful again, they can be added without
+changing the LBS 22000 / 22001 / 22002 trio.

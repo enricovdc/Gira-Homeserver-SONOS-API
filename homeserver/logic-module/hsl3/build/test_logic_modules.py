@@ -17,6 +17,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[4]
 PLAYER_PY = ROOT / "homeserver" / "logic-module" / "hsl3" / "src_22000_sonos_player" / "hsl3_22000_sonos_player.py"
 DISCOVER_PY = ROOT / "homeserver" / "logic-module" / "hsl3" / "src_22001_sonos_discover" / "hsl3_22001_sonos_discover.py"
+ADMIN_PY = ROOT / "homeserver" / "logic-module" / "hsl3" / "src_22002_sonos_admin" / "hsl3_22002_sonos_admin.py"
 
 
 def load_module(path: Path, mod_name: str):
@@ -334,6 +335,171 @@ def _make_requests_stub():
     mod.get = get
     mod.request = request
     return mod
+
+
+class TestSonosAdmin(unittest.TestCase):
+    """LBS 22002 admin module: registry CRUD, MAC normalization, helpers."""
+
+    @classmethod
+    def setUpClass(cls):
+        sys.modules.setdefault("requests", _make_requests_stub())
+        cls.mod = load_module(ADMIN_PY, "sonos_admin_22002")
+
+    def setUp(self):
+        # Fresh registry per test.
+        with self.mod._registry_lock:
+            self.mod._players.clear()
+            self.mod._stations.clear()
+            for k in list(self.mod._cloud.keys()):
+                self.mod._cloud[k] = "" if isinstance(self.mod._cloud[k], str) else 0
+
+    def test_norm_mac(self):
+        n = self.mod._norm_mac
+        self.assertEqual(n("00:0E:58:AB:CD:EF"), "00:0e:58:ab:cd:ef")
+        self.assertEqual(n("000e58abcdef"),       "00:0e:58:ab:cd:ef")
+        self.assertEqual(n("00-0E-58-AB-CD-EF"),  "00:0e:58:ab:cd:ef")
+        self.assertEqual(n(""), "")
+        self.assertEqual(n("not-a-mac"), "")
+        self.assertEqual(n("00:0E:58:AB:CD"), "")   # too short
+
+    def test_is_ip(self):
+        ip = self.mod._is_ip
+        self.assertTrue(ip("192.168.1.50"))
+        self.assertTrue(ip("10.0.0.1"))
+        self.assertFalse(ip("256.0.0.1"))
+        self.assertFalse(ip("1.2.3"))
+        self.assertFalse(ip("not.an.ip.4"))
+        self.assertFalse(ip(""))
+
+    def test_resolve_host_for_ip_literal_passes_through(self):
+        self.assertEqual(self.mod.resolve_host("192.168.1.50"), "192.168.1.50")
+        self.assertEqual(self.mod.resolve_host(""), "")
+
+    def test_resolve_host_by_name_in_registry(self):
+        with self.mod._registry_lock:
+            self.mod._players["x"] = {
+                "id": "x", "name": "livingroom", "ip": "10.0.0.42",
+                "mac": "", "uuid": "", "model": "", "source": "manual",
+            }
+        self.assertEqual(self.mod.resolve_host("livingroom"), "10.0.0.42")
+        self.assertEqual(self.mod.resolve_host("LIVINGROOM"), "10.0.0.42")
+        self.assertEqual(self.mod.resolve_host("missing"), "")
+
+    def test_resolve_host_by_mac_in_registry(self):
+        with self.mod._registry_lock:
+            self.mod._players["x"] = {
+                "id": "x", "name": "lr", "ip": "10.0.0.42",
+                "mac": "00:0e:58:ab:cd:ef", "uuid": "", "model": "",
+                "source": "manual",
+            }
+        self.assertEqual(self.mod.resolve_host("00:0E:58:AB:CD:EF"), "10.0.0.42")
+
+    def test_get_station_uri_by_name(self):
+        with self.mod._registry_lock:
+            self.mod._stations["a"] = {"id": "a", "name": "Foo", "uri": "http://x"}
+            self.mod._stations["b"] = {"id": "b", "name": "Bar", "uri": "http://y"}
+        self.assertEqual(self.mod.get_station_uri("Foo"), "http://x")
+        self.assertEqual(self.mod.get_station_uri("foo"), "http://x")
+        self.assertEqual(self.mod.get_station_uri("missing"), "")
+
+    def test_get_station_uri_by_index(self):
+        with self.mod._registry_lock:
+            self.mod._stations["a"] = {"id": "a", "name": "Bar", "uri": "http://y"}
+            self.mod._stations["b"] = {"id": "b", "name": "Foo", "uri": "http://x"}
+        # Sorted by name (case-insensitive): Bar=1, Foo=2.
+        self.assertEqual(self.mod.get_station_uri(1), "http://y")
+        self.assertEqual(self.mod.get_station_uri(2), "http://x")
+        self.assertEqual(self.mod.get_station_uri(99), "")
+
+    def test_admin_api_add_player_requires_ip_or_mac(self):
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        with self.assertRaises(ValueError):
+            lm.api_add_player({"name": "lr"})
+        with self.assertRaises(ValueError):
+            lm.api_add_player({"name": "lr", "ip": "999.0.0.1"})
+
+    def test_admin_api_add_remove_player(self):
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        r = lm.api_add_player({"name": "kitchen", "ip": "10.0.0.5", "mac": "00:0e:58:ab:cd:ef"})
+        self.assertEqual(r["player"]["ip"], "10.0.0.5")
+        self.assertEqual(r["player"]["mac"], "00:0e:58:ab:cd:ef")
+        self.assertEqual(r["player"]["source"], "manual")
+        with self.mod._registry_lock:
+            self.assertEqual(len(self.mod._players), 1)
+        lm.api_remove_player(r["player"]["id"])
+        with self.mod._registry_lock:
+            self.assertEqual(len(self.mod._players), 0)
+
+    def test_admin_api_station_crud(self):
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        r = lm.api_add_station({"name": "Radio 1", "uri": "http://r1"})
+        sid = r["station"]["id"]
+        listed = lm.api_list_stations()
+        self.assertEqual(len(listed["stations"]), 1)
+        lm.api_update_station(sid, {"name": "Radio One"})
+        with self.mod._registry_lock:
+            self.assertEqual(self.mod._stations[sid]["name"], "Radio One")
+        lm.api_remove_station(sid)
+        with self.mod._registry_lock:
+            self.assertEqual(len(self.mod._stations), 0)
+
+    def test_admin_cloud_get_does_not_leak_secret(self):
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm.api_set_cloud({"clientId": "abc", "clientSecret": "topsecret",
+                          "redirectBase": "http://hs:8080"})
+        r = lm.api_get_cloud()
+        self.assertEqual(r["cloud"]["clientId"], "abc")
+        self.assertNotIn("clientSecret", r["cloud"])
+        self.assertTrue(r["cloud"]["clientSecretSet"])
+
+    def test_admin_oauth_start_requires_full_config(self):
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        self.assertIsNone(lm.oauth_start_params())
+        lm.api_set_cloud({"clientId": "abc", "clientSecret": "s",
+                          "redirectBase": "http://hs:8080"})
+        params = lm.oauth_start_params()
+        self.assertEqual(params["client_id"], "abc")
+        self.assertEqual(params["redirect_uri"], "http://hs:8080/oauth/callback")
+        self.assertEqual(params["response_type"], "code")
+
+
+class TestPlayerHostResolution(unittest.TestCase):
+    """LBS 22000 reads the Admin registry when its Host isn't an IP."""
+
+    @classmethod
+    def setUpClass(cls):
+        sys.modules.setdefault("requests", _make_requests_stub())
+        # Load admin first so its globals are available to the player module.
+        cls.admin = load_module(ADMIN_PY, "sonos_admin_22002_for_player")
+        cls.player = load_module(PLAYER_PY, "sonos_player_22000_for_admin")
+
+    def setUp(self):
+        with self.admin._registry_lock:
+            self.admin._players.clear()
+
+    def test_ip_literal_passes_through(self):
+        self.assertEqual(self.player.resolve_host_spec("192.168.1.50"), "192.168.1.50")
+
+    def test_name_resolved_via_admin_registry(self):
+        with self.admin._registry_lock:
+            self.admin._players["x"] = {
+                "id": "x", "name": "studio", "ip": "10.0.0.99",
+                "mac": "", "uuid": "", "model": "", "source": "manual",
+            }
+        self.assertEqual(self.player.resolve_host_spec("studio"), "10.0.0.99")
+
+    def test_unresolvable_returns_empty(self):
+        self.assertEqual(self.player.resolve_host_spec("nope"), "")
 
 
 if __name__ == "__main__":

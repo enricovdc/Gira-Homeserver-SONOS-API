@@ -8,10 +8,28 @@ node.
 
 import re
 import socket
+import sys
 import threading
 import time
 
 import requests
+
+
+def _publish_to_admin_registry():
+    """If LBS 22002 (Sonos Admin) is loaded, ask it to merge our scan
+    results into its registry. Best-effort; silently no-op when Admin is
+    absent so this LBS still works standalone."""
+    for mod_name, mod in list(sys.modules.items()):
+        if mod is None:
+            continue
+        if "sonos_admin" in mod_name or "hsl3_22002" in mod_name:
+            fn = getattr(mod, "discover_and_merge", None)
+            if callable(fn):
+                try:
+                    return fn()
+                except Exception:
+                    return None
+    return None
 
 
 SSDP_HOST = "239.255.255.250"
@@ -123,6 +141,12 @@ class LogicModule:
         except Exception as e:
             self.fw.run_in_context(self._handle_error, ("DISCOVER_FAILED: {}".format(e),))
             return
+        # If the Sonos Admin LBS is loaded, hand the same scan result over so
+        # it shows up in the web UI; harmless when Admin is absent.
+        try:
+            _publish_to_admin_registry()
+        except Exception:
+            pass
         self.fw.run_in_context(self._handle_result, (players,))
 
     def _handle_result(self, players):

@@ -1,17 +1,34 @@
 # HSL3 logic modules for the Gira HomeServer
 
-Two LBS modules implementing the full Sonos integration as native HSL3
+Three LBS modules implementing the full Sonos integration as native HSL3
 (Python 3.9) logic blocks for the Gira HomeServer / FacilityServer
 firmware 4.13+:
 
 | LBS ID | Name | Role |
 | --- | --- | --- |
 | **22000** | Sonos Player | Per-player control, status, eight radio stations, UPnP event push. One instance per Sonos player. |
-| **22001** | Sonos Discover | SSDP M-SEARCH on the LAN to find Sonos players. Run once at commissioning. |
+| **22001** | Sonos Discover | SSDP M-SEARCH on the LAN to find Sonos players. Optional companion. |
+| **22002** | Sonos Admin | Singleton companion that starts a web UI at `http://<hs-ip>:8080/`. Manages discovered + manually-added players (by **IP and/or MAC**), a global radio-station library, and Sonos Cloud OAuth credentials. Optional; LBS 22000 still works without it. |
 
 LBS IDs are in the third-party range (20000–99999). Register them on
 hs-help.net before publishing if you intend to distribute. For internal
 use no registration is needed.
+
+## How they relate
+
+- **Standalone**: drop LBS 22000 (Sonos Player) on the canvas, set its
+  `Host` to the player's IP, wire KNX. Works as documented in
+  `FEATURE-PARITY.md`. No admin module needed.
+- **With Admin**: add LBS 22002 (Sonos Admin). Its web UI lets end
+  users add/edit players (manually or via SSDP discovery), edit a
+  shared station library, and configure Sonos Cloud OAuth. LBS 22000
+  then accepts a **player name** or a **MAC address** in its `Host`
+  input and resolves it through Admin's registry. DHCP renumbering
+  no longer breaks wiring.
+- **Discover**: a KNX-triggered SSDP scanner whose output is a
+  newline-separated `ip;uuid;model` list. Useful when commissioning
+  without using the Admin web UI. If both Admin and Discover are
+  loaded, Discover's results also feed Admin's registry.
 
 ## Directory layout
 
@@ -26,6 +43,9 @@ hsl3/
 │   └── config.json                   inputs / outputs / store / timer / scripts
 ├── src_22001_sonos_discover/
 │   ├── hsl3_22001_sonos_discover.py
+│   └── config.json
+├── src_22002_sonos_admin/
+│   ├── hsl3_22002_sonos_admin.py     web UI + REST API + OAuth callback
 │   └── config.json
 ├── help/
 │   ├── style.css                     SDK stylesheet (from the GiraHSL skill)
@@ -179,6 +199,72 @@ output changing.
    - Wire status outputs to KNX group addresses with the appropriate
      DPTs (see `homeserver/KNX-MAPPING.md` in the parent directory).
 5. Download to the HomeServer.
+
+## Web admin UI (LBS 22002)
+
+Drop a *Sonos Admin* block onto the canvas (no inputs needed for the
+default config) and download the project. The HSL3 module:
+
+1. Binds an HTTP server on port 8080 (next-free fallback up to 8083,
+   then an OS-assigned ephemeral port). `ListenPort` output reports
+   the actual port.
+2. Starts a periodic SSDP scanner (default every 5 minutes).
+3. Maintains a class-level registry of players and stations that
+   other LBS modules can read.
+
+Open `http://<homeserver-ip>:<ListenPort>/` in a browser:
+
+### Players section
+
+- Lists every player in the registry with **IP**, **MAC**, model,
+  and a `source` tag (`ssdp` for auto-discovered, `manual` for
+  added in the UI).
+- **Add player** form takes Name + IP + MAC. At least one of IP / MAC
+  is required. MAC is preferred when DHCP is in use because the
+  module re-resolves IP-from-MAC on every periodic scan, so a DHCP
+  renumber doesn't break the integration.
+- **Scan now** button triggers an immediate SSDP M-SEARCH.
+- Each row's Name / IP / MAC fields are editable inline — PATCH
+  saves to the registry.
+
+### Stations section
+
+- A central radio-station library shared across all players.
+- **Add station** with Name + Stream URI. The URI accepts plain
+  `http://...` (auto-rewritten to `x-rincon-mp3radio://` at playback
+  time) or the direct-broadcast form.
+- LBS 22000 instances can read this library via the helper
+  `get_station_uri(name_or_index)` exported by the Admin module,
+  so multiple players can share one station list.
+
+### Sonos Cloud (optional)
+
+- Stores OAuth client credentials and the redirect-base URL.
+- **Authorize with Sonos** button starts the OAuth flow:
+  `/oauth/start` redirects to Sonos's authorize URL with the right
+  parameters; Sonos redirects back to `/oauth/callback` with a
+  code; the Admin exchanges the code for access + refresh tokens
+  and stores them in the registry.
+- `CloudAuthorized` output flips to `1` when a valid token is held.
+- Actual cloud-API calls are out of scope for this module (it's the
+  plumbing); a future LBS can read the tokens and fall back to the
+  Sonos Cloud Control API when local SOAP is unavailable.
+
+## Using a name or MAC as a player Host
+
+When LBS 22002 (Sonos Admin) is present, LBS 22000's `Host` input
+accepts more than a literal IPv4 address:
+
+| Host value | Behaviour |
+| --- | --- |
+| `192.168.1.50` | Used as-is (backward compatible). |
+| `00:0E:58:AB:CD:EF` | Looked up in the Admin registry. If a player has this MAC, its current IP is used. ARP table is consulted if no match. |
+| `livingroom` | Case-insensitive name lookup in the registry. Useful when the same player must be referenced from multiple LBS instances. |
+| `RINCON_XXX...` | Sonos UUID lookup. |
+
+If resolution fails, the player block writes `LastError = ""` (it
+treats the player as offline) and recovers automatically on the next
+Tick once the registry updates.
 
 ## Troubleshooting
 

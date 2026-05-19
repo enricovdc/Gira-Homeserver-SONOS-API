@@ -5,12 +5,13 @@ control Sonos players over the local UPnP/SOAP API. No bridge service,
 no external machine, no SSH access required — the integration runs
 entirely inside the HomeServer's own logic engine.
 
-Two LBS modules:
+Three LBS modules:
 
 | LBS | Name | Role |
 | --- | --- | --- |
 | **22000** | Sonos Player | One instance per Sonos player. Play / pause / stop / next / previous, volume, mute, eight configurable radio stations, status outputs, UPnP event push. |
-| **22001** | Sonos Discover | SSDP M-SEARCH to find players on the LAN. Run once at commissioning. |
+| **22001** | Sonos Discover | KNX-triggered SSDP M-SEARCH to find players on the LAN. Optional. |
+| **22002** | Sonos Admin | Singleton companion that runs a web UI at `http://<hs-ip>:8080/` for managing players (by **IP and/or MAC**), a global radio-station library, and Sonos Cloud OAuth — all from inside HSL3, no external process. Optional. |
 
 Compatible with Sonos firmware **2024+ and 2026** and Gira HomeServer
 firmware **4.13+** (HSL3 / Python 3.9 logic-module SDK).
@@ -20,22 +21,35 @@ firmware **4.13+** (HSL3 / Python 3.9 logic-module SDK).
 - **Pure HomeServer install.** Import the `.hslz` archives in Experte
   via *Logikbausteine → Importieren*. No bridge, no SSH, no Linux box.
 - **Local control only.** Talks to Sonos players directly via SOAP on
-  port 1400. No Sonos OAuth, no developer registration, no rate limits,
-  no cloud dependency.
+  port 1400. No Sonos OAuth required, no developer registration, no
+  rate limits, no cloud dependency.
 - **UPnP event push.** Each player subscribes to AVTransport +
   RenderingControl events; status outputs update in ~1 s when state
   changes externally (Sonos app, AirPlay handoff, volume knob).
 - **Firmware-2026 hardening.** Metadata-free SetAVTransportURI, the
   `x-rincon-mp3radio://` direct-broadcast scheme, and an automatic
   fallback ladder for players that reject the first attempt.
-- **Per-player radio.** Eight configurable stations per instance,
-  triggered by index.
+- **Per-player radio** (8 configurable stations per LBS 22000 instance)
+  **or** a shared global station library managed via the Admin web UI.
+- **Web admin UI** (LBS 22002, optional): runs at
+  `http://<hs-ip>:8080/` *from inside HSL3* — no external process.
+  Manage discovered + manually-added players (by **IP and/or MAC**;
+  MAC is preferred under DHCP because the registry auto-refreshes
+  IP-from-MAC via `/proc/net/arp` on every scan), edit the station
+  library, and authorize Sonos Cloud OAuth.
+- **DHCP-resilient player references.** When Admin is present, LBS
+  22000's `Host` input accepts IP / MAC / name / UUID. DHCP renumbering
+  no longer breaks wiring — the registry re-resolves on every Tick.
+- **Cloud-ready.** Admin's OAuth handler captures Sonos Cloud Control
+  API tokens (client_id + client_secret + redirect_uri configured in
+  the UI). Local SOAP remains the primary path; the tokens are
+  plumbing for a future cloud-fallback LBS.
 - **KNX-friendly outputs.** Online, State, Volume, Mute, Title, Artist,
   ActiveStation, LastError, Subscribed — wire to group addresses with
   the recommended DPTs in [homeserver/KNX-MAPPING.md](homeserver/KNX-MAPPING.md).
-- **Graceful degradation.** If the NOTIFY listener can't bind, the
-  module falls back to timer-based status polling and keeps working.
-- **15 unit tests** with a stubbed `Hsl3Framework`, runnable in CI.
+- **Graceful degradation.** If a listener can't bind, modules fall
+  back to timer-based status polling and keep working.
+- **30 unit tests** with a stubbed `Hsl3Framework`, runnable in CI.
 
 ## Quick start
 
@@ -50,20 +64,25 @@ firmware **4.13+** (HSL3 / Python 3.9 logic-module SDK).
    Output: `homeserver/logic-module/hsl3/build/dist/22000_sonos_player.hslz`
    and `22001_sonos_discover.hslz`.
 
-2. **Import in Experte.** *Logikbausteine → Importieren* → pick the two
-   `.hslz` files. The blocks appear under **Multimedia → Sonos**.
+2. **Import in Experte.** *Logikbausteine → Importieren* → pick the
+   three `.hslz` files. The blocks appear under **Multimedia → Sonos**.
 
-3. **(Optional) Discover players.** Drag a *Sonos Discover* block,
-   trigger it once. The `Result` output lists `ip;uuid;model` per line.
+3. **(Recommended) Add the Admin block.** Drop a *Sonos Admin* block
+   onto the canvas. Download. Browse to
+   `http://<hs-ip>:8080/` — discover players, add players manually by
+   IP and/or MAC, define the radio-station library, optionally
+   authorize Sonos Cloud.
 
 4. **Add a *Sonos Player* block per player.** Set `Host` to the
-   player's IP. Wire control inputs (Play, Pause, SetVolume, …) to KNX
-   group addresses. Wire status outputs to group addresses using the
-   DPTs in [homeserver/KNX-MAPPING.md](homeserver/KNX-MAPPING.md).
+   player's IP — or, with Admin loaded, to the player's MAC, name,
+   or UUID. Wire control inputs (Play, Pause, SetVolume, …) to KNX
+   group addresses. Wire status outputs to group addresses using
+   the DPTs in [homeserver/KNX-MAPPING.md](homeserver/KNX-MAPPING.md).
 
-5. **Configure radio stations** by writing the stream URIs to
-   `Station1Uri … Station8Uri`. Trigger playback by writing the
-   station index to `StartRadio`.
+5. **Configure radio stations.** Either write the stream URIs to the
+   player block's `Station1Uri … Station8Uri` inputs, or add them
+   in the Admin web UI's central library. Trigger playback by
+   writing the station index to `StartRadio`.
 
 6. **Download to HomeServer.** Within one Tick interval (~60 s) the
    subscriptions register and status outputs populate.
