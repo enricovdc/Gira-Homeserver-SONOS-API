@@ -161,6 +161,9 @@ def make_player_inputs(host="10.0.0.1", **overrides):
         "GroupPresetName": StubSlot(""),
         "Ungroup":      StubSlot(0),
         "Resubscribe":  StubSlot(0),
+        "PlayPause":    StubSlot(0),
+        "NextPrev":     StubSlot(0),
+        "PresetNextPrev": StubSlot(0),
         "VolStep":      StubSlot(2),
         "PollInterval": StubSlot(60),
         "SubTimeout":   StubSlot(1800),
@@ -458,6 +461,60 @@ class TestSonosPlayerLogicModule(unittest.TestCase):
         self.assertEqual(fw.outputs["PrevAllowed"], 0)
         self.assertEqual(fw.outputs["ShuffleAllowed"], 0)
         self.assertEqual(fw.outputs["RepeatAllowed"], 0)
+
+    def test_playpause_input_dispatches_by_value(self):
+        """PlayPause value 1 fires Play; value 0 fires Pause. Drives a
+        single KNX 1-bit GA without two separate buttons."""
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        actions = []
+        lm._action_play = lambda: actions.append("play")
+        lm._action_pause = lambda: actions.append("pause")
+        # Run inline rather than spawning threads.
+        lm._run_control_threaded = lambda fn: fn()
+        lm._host = "10.0.0.1"
+        # Value 1 — should dispatch play.
+        ins = make_player_inputs(host="10.0.0.1")
+        ins["PlayPause"] = StubSlot(1, changed=True)
+        lm.on_calc(ins)
+        self.assertEqual(actions, ["play"])
+        # Value 0 — should dispatch pause.
+        actions.clear()
+        ins = make_player_inputs(host="10.0.0.1")
+        ins["PlayPause"] = StubSlot(0, changed=True)
+        lm.on_calc(ins)
+        self.assertEqual(actions, ["pause"])
+
+    def test_nextprev_input_dispatches_by_value(self):
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        actions = []
+        lm._action_next = lambda: actions.append("next")
+        lm._action_previous = lambda: actions.append("prev")
+        lm._run_control_threaded = lambda fn: fn()
+        lm._host = "10.0.0.1"
+        ins = make_player_inputs(host="10.0.0.1")
+        ins["NextPrev"] = StubSlot(1, changed=True)
+        lm.on_calc(ins)
+        self.assertEqual(actions, ["next"])
+        actions.clear()
+        ins = make_player_inputs(host="10.0.0.1")
+        ins["NextPrev"] = StubSlot(0, changed=True)
+        lm.on_calc(ins)
+        self.assertEqual(actions, ["prev"])
+
+    def test_mark_active_station_publishes_name(self):
+        """_mark_active_station writes both ActiveStation (index) and
+        ActiveStationName (string) so visualisations can display the
+        preset's friendly name without re-reading the Admin library."""
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._mark_active_station(3, "BBC Radio 1")
+        self.assertEqual(fw.outputs["ActiveStation"], 3.0)
+        self.assertEqual(fw.outputs["ActiveStationName"], b"BBC Radio 1")
 
     def test_status_poll_offline_clears_allowed_flags(self):
         """Lost contact must zero every *Allowed output so the
@@ -1239,10 +1296,20 @@ class TestPlayerStationFromAdmin(unittest.TestCase):
         cls.player = load_module(PLAYER_PY, "sonos_player_22000_for_stations")
 
     def setUp(self):
-        with self.admin._registry_lock:
-            self.admin._stations.clear()
-            self.admin._groups.clear()
-            self.admin._players.clear()
+        # The player helpers (_lookup_station_via_admin /
+        # _admin_station_count / _admin_player_record) walk sys.modules
+        # to find an admin module and return the first match. Other
+        # test classes leave sibling admin modules loaded, so clearing
+        # only self.admin would still leak state through those siblings.
+        # Reset every loaded admin module for a hermetic test.
+        for mod_name, mod in list(sys.modules.items()):
+            if mod is None:
+                continue
+            if "sonos_admin" in mod_name and hasattr(mod, "_stations"):
+                with mod._registry_lock:
+                    mod._stations.clear()
+                    mod._groups.clear()
+                    mod._players.clear()
 
     def test_lookup_station_via_admin_returns_dict_with_metadata(self):
         with self.admin._registry_lock:
@@ -1253,6 +1320,82 @@ class TestPlayerStationFromAdmin(unittest.TestCase):
         rec = self.player._lookup_station_via_admin(1)
         self.assertEqual(rec["uri"], "x-sonosapi-stream:s24939")
         self.assertIn("SA_RINCON65031", rec["metadata"])
+        # Admin must also stamp the alphabetical index so the Player
+        # can publish ActiveStation regardless of whether the lookup
+        # was by name or index.
+        self.assertEqual(rec["index"], 1)
+
+    def test_admin_get_station_count_and_index(self):
+        """get_station_count() reflects the registry size; get_station
+        returns the right 1-based alphabetical index for name lookups."""
+        with self.admin._registry_lock:
+            self.admin._stations["a"] = {"id": "a", "name": "Charlie", "uri": "u1"}
+            self.admin._stations["b"] = {"id": "b", "name": "alpha",   "uri": "u2"}
+            self.admin._stations["c"] = {"id": "c", "name": "Bravo",   "uri": "u3"}
+        self.assertEqual(self.admin.get_station_count(), 3)
+        # Sorted alphabetically (case-insensitive): alpha=1, Bravo=2, Charlie=3
+        self.assertEqual(self.admin.get_station("alpha")["index"], 1)
+        self.assertEqual(self.admin.get_station("BRAVO")["index"], 2)
+        self.assertEqual(self.admin.get_station("Charlie")["index"], 3)
+        self.assertEqual(self.admin.get_station(2)["name"], "Bravo")
+
+    def test_action_step_preset_wraps_forward_and_backward(self):
+        """PresetNextPrev cycles through the library and wraps at both
+        ends so a single 1-bit KNX address can browse the whole library."""
+        # Sync the seed across every loaded admin module: the player's
+        # _admin_station_count helper walks sys.modules and returns the
+        # first match, so an unseeded sibling admin would shadow the
+        # one we set up here.
+        for mod_name, mod in list(sys.modules.items()):
+            if mod is None:
+                continue
+            if "sonos_admin" in mod_name and hasattr(mod, "_stations"):
+                with mod._registry_lock:
+                    mod._stations.clear()
+                    for i, n in enumerate(("Alpha", "Bravo", "Charlie"), start=1):
+                        mod._stations[str(i)] = {
+                            "id": str(i), "name": n,
+                            "uri": "u" + str(i), "metadata": "",
+                        }
+        fw = StubFramework()
+        lm = self.player.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        # _action_start_radio fans out to SOAP — short-circuit it and
+        # just record which index it was called with.
+        calls = []
+        lm._action_start_radio = lambda idx: calls.append(idx)
+        # First "next" from a never-started player → preset 1.
+        lm._active_station = 0
+        lm._action_step_preset(+1)
+        self.assertEqual(calls[-1], 1)
+        # Advance: 1 → 2 → 3 → wrap to 1.
+        lm._active_station = 1
+        lm._action_step_preset(+1); self.assertEqual(calls[-1], 2)
+        lm._active_station = 2
+        lm._action_step_preset(+1); self.assertEqual(calls[-1], 3)
+        lm._active_station = 3
+        lm._action_step_preset(+1); self.assertEqual(calls[-1], 1)
+        # Backward: 1 → wrap to 3, then 3 → 2 → 1.
+        lm._active_station = 1
+        lm._action_step_preset(-1); self.assertEqual(calls[-1], 3)
+        lm._active_station = 3
+        lm._action_step_preset(-1); self.assertEqual(calls[-1], 2)
+        # First "prev" from a never-started player → wraps to last preset.
+        lm._active_station = 0
+        lm._action_step_preset(-1); self.assertEqual(calls[-1], 3)
+
+    def test_action_step_preset_empty_library_writes_error(self):
+        for mod_name, mod in list(sys.modules.items()):
+            if mod is None:
+                continue
+            if "sonos_admin" in mod_name and hasattr(mod, "_stations"):
+                with mod._registry_lock:
+                    mod._stations.clear()
+        fw = StubFramework()
+        lm = self.player.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._action_step_preset(+1)
+        self.assertEqual(fw.outputs["LastError"], b"NO_PRESETS")
 
     def test_admin_get_player_record_by_ip_mac_uuid_name(self):
         """LBS 22000's ZoneName output sources via this helper. Must

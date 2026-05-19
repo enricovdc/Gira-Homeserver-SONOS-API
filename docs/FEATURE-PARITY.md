@@ -2,7 +2,7 @@
 
 Every user-facing function the integration exposes, and where it lives
 in the HSL3 modules. Refreshed against the v1.0.0 module shipped in
-this repo: **LBS 22000 Sonos Player** with 24 inputs / 27 outputs and
+this repo: **LBS 22000 Sonos Player** with 27 inputs / 28 outputs and
 **LBS 22001 Sonos Admin** with 7 inputs / 8 outputs + 5 retentive
 stores.
 
@@ -28,6 +28,9 @@ stores.
 | Form group preset by name | `GroupPresetName` (E17) | Case-insensitive |
 | Break out of current group | `Ungroup` (E18) | Rising edge → `BecomeCoordinatorOfStandaloneGroup` |
 | Force UPnP re-subscribe | `Resubscribe` (E19) | Rising edge clears SIDs + re-subscribes |
+| Play / Pause toggle (single 1-bit GA) | `PlayPause` (E20) | Value-driven. Writing 1 plays, writing 0 pauses. Pairs with one KNX toggle GA. |
+| Next / Previous track toggle | `NextPrev` (E21) | Value-driven. Writing 1 = next, writing 0 = previous. |
+| Next / Previous preset toggle | `PresetNextPrev` (E22) | Steps through the Admin preset library alphabetically. Wraps at both ends. NO_PRESETS on LastError if the library is empty. |
 
 ## Status / observability (LBS 22000 outputs)
 
@@ -57,20 +60,21 @@ stores.
 | Repeat state | `RepeatState` (A22) | 1 when REPEAT_ALL or REPEAT_ONE |
 | Group master | `GroupInfo` (A23) | Empty when coordinator / standalone; master's Zone Name (resolved via Admin) or RINCON UUID when a slave |
 | Is coordinator | `IsCoordinator` (A24) | 1 when this player is the group coordinator or standalone, 0 when slave. Derived from `CurrentTrackURI` starting with `x-rincon:` |
-| Active preset index | `ActiveStation` (A25) | 0 = none. Index of the last preset started by `StartRadio`/`StartRadioName` |
-| Last error code | `LastError` (A26) | UPnP code, `UNREACHABLE`, `HTTP_<n>`, `PRESET_NOT_FOUND`, `GROUP_NOT_FOUND`, `GROUP_PARTIAL`, `SET_PLAY_MODE_FAILED`, `EXCEPTION: …` |
-| UPnP subscription health | `Subscribed` (A27) | 1 = both AVTransport + RenderingControl subscriptions alive |
+| Active preset index | `ActiveStation` (A25) | 0 = none. Alphabetical 1..N index of the last preset started, regardless of whether it was selected by index, name, or `PresetNextPrev` |
+| Active preset name | `ActiveStationName` (A26) | Preset's display name from the Admin library |
+| Last error code | `LastError` (A27) | UPnP code, `UNREACHABLE`, `HTTP_<n>`, `PRESET_NOT_FOUND`, `NO_PRESETS`, `GROUP_NOT_FOUND`, `GROUP_PARTIAL`, `SET_PLAY_MODE_FAILED`, `EXCEPTION: …` |
+| UPnP subscription health | `Subscribed` (A28) | 1 = both AVTransport + RenderingControl subscriptions alive |
 
 ## Player configuration (LBS 22000 tunable inputs)
 
 | Function | Input | Default | Notes |
 | --- | --- | --- | --- |
 | Player host | `Host` (E1) | "" (required) | UUID (preferred) / MAC / name / IPv4. Admin resolves the first three to a current IP. |
-| Volume step | `VolStep` (E20) | 2 | Applied by `VolUp` / `VolDown` |
-| Status poll interval | `PollInterval` (E21) | 60 s | Leave at 0 to use the Admin's Player Defaults value |
-| UPnP subscription timeout | `SubTimeout` (E22) | 1800 s | Leave at 0 to use the Admin's Player Defaults value |
-| HTTP request timeout | `HttpTimeout` (E23) | 5 s | Leave at 0 to use the Admin's Player Defaults value |
-| Callback base URL | `CallbackBase` (E24) | "" | Empty → Admin default → auto-detected `http://<lan-ip>:<listener-port>` |
+| Volume step | `VolStep` (E23) | 2 | Applied by `VolUp` / `VolDown` |
+| Status poll interval | `PollInterval` (E24) | 60 s | Leave at 0 to use the Admin's Player Defaults value |
+| UPnP subscription timeout | `SubTimeout` (E25) | 1800 s | Leave at 0 to use the Admin's Player Defaults value |
+| HTTP request timeout | `HttpTimeout` (E26) | 5 s | Leave at 0 to use the Admin's Player Defaults value |
+| Callback base URL | `CallbackBase` (E27) | "" | Empty → Admin default → auto-detected `http://<lan-ip>:<listener-port>` |
 
 ## Presets (Admin library, no per-player slots)
 

@@ -388,8 +388,8 @@ def _admin_player_defaults():
 
 def _lookup_station_via_admin(idx_or_name):
     """If the Sonos Admin LBS is loaded, ask it for the full station
-    record (uri + metadata + name). Returns None when Admin isn't
-    present or doesn't know the station."""
+    record (uri + metadata + name + index). Returns None when Admin
+    isn't present or doesn't know the station."""
     for mod_name, mod in list(sys.modules.items()):
         if mod is None:
             continue
@@ -403,6 +403,25 @@ def _lookup_station_via_admin(idx_or_name):
                 except Exception:
                     pass
     return None
+
+
+def _admin_station_count():
+    """Total number of presets in the Admin library. Returns 0 when
+    Admin isn't loaded or has nothing yet — `PresetNextPrev` then
+    surfaces NO_PRESETS instead of dividing by zero."""
+    for mod_name, mod in list(sys.modules.items()):
+        if mod is None:
+            continue
+        if "sonos_admin" in mod_name or "hsl3_22001" in mod_name:
+            fn = getattr(mod, "get_station_count", None)
+            if callable(fn):
+                try:
+                    n = fn()
+                    if isinstance(n, int):
+                        return n
+                except Exception:
+                    pass
+    return 0
 
 SERVICE_PATHS = {
     "AVTransport":      "/MediaRenderer/AVTransport/Control",
@@ -698,6 +717,7 @@ class LogicModule:
         self._last_allowed = dict(_DEFAULT_ALLOWED)
         self._uuid = ""           # Sonos RINCON UUID — needed to build queue URI
         self._active_station = 0
+        self._active_station_name = ""
         self._online = False
         self._poll_interval_s = 60
         self._renew_threshold_s = 300  # renew when < this remaining
@@ -838,6 +858,28 @@ class LogicModule:
             self._sub_av_exp = 0.0
             self._sub_rc_exp = 0.0
             self._run_control_threaded(self._maintain_subscriptions)
+
+        # Value-driven toggles. Unlike the rising-edge Play / Pause /
+        # Next / Prev / StartRadio inputs above, these dispatch on
+        # *any* change of value — pattern-matched to a single KNX 1-bit
+        # group address. Each value carries its own action so the input
+        # works equally well for "0 = pause / 1 = play" buttons in a
+        # visualisation and for two-state KNX switches.
+        if inputs["PlayPause"].changed:
+            if inputs["PlayPause"].value:
+                self._run_control_threaded(self._action_play)
+            else:
+                self._run_control_threaded(self._action_pause)
+        if inputs["NextPrev"].changed:
+            if inputs["NextPrev"].value:
+                self._run_control_threaded(self._action_next)
+            else:
+                self._run_control_threaded(self._action_previous)
+        if inputs["PresetNextPrev"].changed:
+            direction = 1 if inputs["PresetNextPrev"].value else -1
+            self._run_control_threaded(
+                lambda d=direction: self._action_step_preset(d)
+            )
 
     def on_timer(self, timer):
         if timer["Tick"].changed:
@@ -1068,7 +1110,7 @@ class LogicModule:
             return None
         return extract_response_field(body, "Actions")
 
-    def _play_via_queue(self, uri, metadata, spec):
+    def _play_via_queue(self, uri, metadata, active_idx, active_name=""):
         """Queue-and-play path for container URIs (playlist / album /
         Sonos saved queue). The standard Sonos sequence is:
 
@@ -1116,7 +1158,7 @@ class LogicModule:
         if not ok:
             self.fw.run_in_context(self._write_error, (err or "PLAY_FAILED",))
             return
-        self.fw.run_in_context(self._mark_active_station, (spec,))
+        self.fw.run_in_context(self._mark_active_station, (active_idx, active_name))
 
     # ----- Group preset actions --------------------------------------------
 
@@ -1200,13 +1242,18 @@ class LogicModule:
             return
         uri = admin_rec["uri"]
         metadata = admin_rec.get("metadata") or ""
+        # ``index`` and ``name`` come from Admin's get_station so the
+        # ActiveStation + ActiveStationName outputs are stable whether
+        # the caller used the numeric index or the preset name.
+        active_idx = int(admin_rec.get("index") or 0)
+        active_name = admin_rec.get("name", "") or ""
 
         # Containers (Spotify/Apple playlists, Sonos saved queues, …)
         # cannot be SetAVTransportURI'd directly — they must be added to
         # the player's queue first, then the transport switches to the
         # queue URI. Branch here.
         if _is_container_uri(uri):
-            self._play_via_queue(uri, metadata, spec)
+            self._play_via_queue(uri, metadata, active_idx, active_name)
             return
 
         if metadata:
@@ -1219,7 +1266,7 @@ class LogicModule:
             if ok:
                 play_ok, _b2, play_err = self._soap("AVTransport", "Play", ENV_PLAY)
                 if play_ok:
-                    self.fw.run_in_context(self._mark_active_station, (spec,))
+                    self.fw.run_in_context(self._mark_active_station, (active_idx, active_name))
                 else:
                     self.fw.run_in_context(self._write_error, (play_err,))
                 return
@@ -1235,13 +1282,30 @@ class LogicModule:
             if ok:
                 play_ok, _b, play_err = self._soap("AVTransport", "Play", ENV_PLAY)
                 if play_ok:
-                    self.fw.run_in_context(self._mark_active_station, (spec,))
+                    self.fw.run_in_context(self._mark_active_station, (active_idx, active_name))
                 else:
                     self.fw.run_in_context(self._write_error, (play_err,))
                 return
             if err not in META_REJECT_CODES:
                 break
         self.fw.run_in_context(self._write_error, ("RADIO_START_FAILED",))
+
+    def _action_step_preset(self, direction):
+        """Step one position through the Admin preset library and start
+        the resulting preset. ``direction`` is +1 (next) or -1 (prev).
+        Wraps at both ends so a single 1-bit KNX address can cycle
+        through the whole library. NO_PRESETS surfaces on LastError when
+        the library is empty or Admin isn't loaded."""
+        count = _admin_station_count()
+        if count <= 0:
+            self.fw.run_in_context(self._write_error, ("NO_PRESETS",))
+            return
+        current = self._active_station
+        if direction > 0:
+            next_idx = 1 if current <= 0 else (current % count) + 1
+        else:
+            next_idx = count if current <= 1 else current - 1
+        self._action_start_radio(next_idx)
 
     # ----- Periodic tick ----------------------------------------------------
 
@@ -1462,6 +1526,7 @@ class LogicModule:
         self.fw.set_output("GroupInfo", to_iso_bytes(self._group_info_string()))
         self.fw.set_output("IsCoordinator", 0 if self._last_group_master else 1)
         self.fw.set_output("ActiveStation", float(self._active_station))
+        self.fw.set_output("ActiveStationName", to_iso_bytes(self._active_station_name))
         self.fw.set_output("ZoneName", to_iso_bytes(self._last_zone_name))
 
     def _publish_state_flags(self):
@@ -1549,18 +1614,19 @@ class LogicModule:
         self._last_mute = mute
         self.fw.set_output("Mute", 1 if mute else 0)
 
-    def _mark_active_station(self, spec):
-        """Update the ActiveStation output. Accepts either an int index
-        (preferred) or a station-name string; in the latter case the
-        output records 0 because the alphabetical index would be
-        meaningful only in conjunction with the Admin library state."""
-        if isinstance(spec, int):
-            idx = spec
-        else:
-            s = str(spec).strip()
-            idx = int(s) if s.isdigit() else 0
+    def _mark_active_station(self, idx, name=""):
+        """Update the ActiveStation + ActiveStationName outputs after a
+        successful preset start. ``idx`` is the 1-based alphabetical
+        position in the Admin library (0 = unknown); ``name`` is the
+        preset's display name."""
+        try:
+            idx = int(idx)
+        except (TypeError, ValueError):
+            idx = 0
         self._active_station = idx
+        self._active_station_name = name or ""
         self.fw.set_output("ActiveStation", float(idx))
+        self.fw.set_output("ActiveStationName", to_iso_bytes(self._active_station_name))
 
     def _write_error(self, code):
         if self.debug is not None:

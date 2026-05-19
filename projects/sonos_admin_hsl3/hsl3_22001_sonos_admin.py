@@ -293,25 +293,39 @@ def get_station_uri(index_or_name):
 def get_station(index_or_name):
     """LBS 22000 calls this to fetch the full station record. Returns None
     when not found. The returned dict has the keys ``id``, ``name``,
-    ``uri`` and ``metadata`` — the last carries the DIDL-Lite XML
-    captured from a Sonos favorite so cloud-service items play correctly
-    (their music-service binding lives in the metadata, not in the URI)."""
+    ``uri``, ``metadata`` and ``index`` — the metadata carries the
+    DIDL-Lite XML captured from a Sonos favorite so cloud-service items
+    play correctly (their music-service binding lives in the metadata,
+    not in the URI), and ``index`` is the 1-based alphabetical position
+    in the library so the caller can publish a stable ActiveStation
+    output regardless of whether the lookup was by name or by index."""
     if index_or_name is None:
         return None
     key = str(index_or_name).strip()
     with _registry_lock:
+        sorted_stations = sorted(_stations.values(), key=lambda s: s["name"].lower())
         # Numeric: index into sorted list.
         if key.isdigit():
             idx = int(key)
-            sorted_stations = sorted(_stations.values(), key=lambda s: s["name"].lower())
             if 1 <= idx <= len(sorted_stations):
-                return dict(sorted_stations[idx - 1])
+                rec = dict(sorted_stations[idx - 1])
+                rec["index"] = idx
+                return rec
             return None
         # Name match (case-insensitive).
-        for rec in _stations.values():
+        for i, rec in enumerate(sorted_stations, start=1):
             if rec["name"].lower() == key.lower():
-                return dict(rec)
+                r = dict(rec)
+                r["index"] = i
+                return r
     return None
+
+
+def get_station_count():
+    """Number of presets currently in the Admin library. LBS 22000's
+    PresetNextPrev input uses this to wrap around at the boundaries."""
+    with _registry_lock:
+        return len(_stations)
 
 
 # ---------------------------------------------------------------------------

@@ -26,6 +26,9 @@
       { "type": "string", "identifier": "GroupPresetName","init_value": "", "label": "Form Group Preset by Name" },
       { "type": "number", "identifier": "Ungroup",       "init_value": 0,   "label": "Ungroup this Player" },
       { "type": "number", "identifier": "Resubscribe",   "init_value": 0,   "label": "Force Re-subscribe" },
+      { "type": "number", "identifier": "PlayPause",     "init_value": 0,   "label": "Play Pause Toggle 1 Play 0 Pause" },
+      { "type": "number", "identifier": "NextPrev",      "init_value": 0,   "label": "Next Prev Track Toggle 1 Next 0 Prev" },
+      { "type": "number", "identifier": "PresetNextPrev","init_value": 0,   "label": "Next Prev Preset Toggle 1 Next 0 Prev" },
       { "type": "number", "identifier": "VolStep",       "init_value": 2,   "label": "Volume Up Down Step" },
       { "type": "number", "identifier": "PollInterval",  "init_value": 60,  "label": "Status Poll Interval seconds" },
       { "type": "number", "identifier": "SubTimeout",    "init_value": 1800,"label": "UPnP Subscription Timeout seconds" },
@@ -58,6 +61,7 @@
       { "type": "string", "identifier": "GroupInfo",     "init_value": "", "label": "Group Master Zone Name or UUID" },
       { "type": "number", "identifier": "IsCoordinator", "init_value": 1,  "label": "Is Group Coordinator or Standalone" },
       { "type": "number", "identifier": "ActiveStation", "init_value": 0,  "label": "Active Preset Index" },
+      { "type": "string", "identifier": "ActiveStationName","init_value": "", "label": "Active Preset Name" },
       { "type": "string", "identifier": "LastError",     "init_value": "", "label": "Last Error" },
       { "type": "number", "identifier": "Subscribed",    "init_value": 0,  "label": "UPnP Subscribed" }
     ],
@@ -93,6 +97,9 @@
           { "label": "Gruppen-Preset per Name bilden" },
           { "label": "Diesen Player aus Gruppe loesen" },
           { "label": "Erneut abonnieren" },
+          { "label": "Play Pause Umschalter 1 Play 0 Pause" },
+          { "label": "Naechster Vorheriger Titel Umschalter 1 Naechster 0 Vorheriger" },
+          { "label": "Naechstes Vorheriges Preset Umschalter 1 Naechstes 0 Vorheriges" },
           { "label": "Lautstaerke-Schritt" },
           { "label": "Status-Abfrageintervall Sekunden" },
           { "label": "UPnP Abonnement Timeout Sekunden" },
@@ -125,6 +132,7 @@
           { "label": "Gruppen-Master Zonen-Name oder UUID" },
           { "label": "Ist Gruppen-Koordinator oder Alleinstehend" },
           { "label": "Aktiver Preset-Index" },
+          { "label": "Aktiver Preset-Name" },
           { "label": "Letzter Fehler" },
           { "label": "UPnP Abonniert" }
         ]
