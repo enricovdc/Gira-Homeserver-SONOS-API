@@ -12,13 +12,17 @@ class ConfigError extends Error {
 }
 
 const DEFAULTS = {
-  server: { host: '0.0.0.0', port: 8080, authToken: '' },
+  server: { host: '0.0.0.0', port: 8080, authToken: '', publicUrl: '' },
   discovery: { enabled: true, timeoutMs: 4000, refreshIntervalMs: 300000 },
   players: [],
   defaultPlayer: null,
   radioStations: [],
   status: { pollIntervalMs: 5000 },
-  logging: { level: 'info' }
+  logging: { level: 'info' },
+  eventing: { enabled: true, callbackBaseUrl: '', timeoutSec: 1800 },
+  webhook: { url: '', authHeader: '' },
+  cloud: { enabled: false, clientId: '', clientSecret: '' },
+  admin: { enabled: true }
 };
 
 function isString(v) { return typeof v === 'string' && v.length > 0; }

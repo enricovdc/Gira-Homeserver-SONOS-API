@@ -1,8 +1,9 @@
 {
   "server": {
-    "host": "0.0.0.0",
+    "host": "127.0.0.1",
     "port": 8080,
-    "authToken": ""
+    "authToken": "",
+    "publicUrl": ""
   },
   "discovery": {
     "enabled": true,
@@ -26,23 +27,30 @@
       "index": 1,
       "name": "Radio 1",
       "streamUri": "x-rincon-mp3radio://stream.example.com/radio1.mp3",
-      "metadata": {
-        "title": "Radio 1"
-      }
+      "metadata": { "title": "Radio 1" }
     },
     {
       "index": 2,
       "name": "Radio 2",
       "streamUri": "x-rincon-mp3radio://stream.example.com/radio2.mp3",
-      "metadata": {
-        "title": "Radio 2"
-      }
+      "metadata": { "title": "Radio 2" }
     }
   ],
-  "status": {
-    "pollIntervalMs": 5000
+  "status": { "pollIntervalMs": 5000 },
+  "logging": { "level": "info" },
+  "eventing": {
+    "enabled": true,
+    "callbackBaseUrl": "",
+    "timeoutSec": 1800
   },
-  "logging": {
-    "level": "info"
-  }
+  "webhook": {
+    "url": "",
+    "authHeader": ""
+  },
+  "cloud": {
+    "enabled": false,
+    "clientId": "",
+    "clientSecret": ""
+  },
+  "admin": { "enabled": true }
 }

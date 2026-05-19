@@ -35,6 +35,15 @@ class RadioStationStore {
     return s;
   }
 
+  remove(index) {
+    const i = Number(index);
+    const s = this.byIndex.get(i);
+    if (!s) return false;
+    this.byIndex.delete(i);
+    this.stations.delete(s.name.toLowerCase());
+    return true;
+  }
+
   byIndexLookup(index) {
     const i = Number(index);
     if (!Number.isInteger(i)) throw new RadioError('Station index must be integer', 'INVALID_ARG');

@@ -1,6 +1,6 @@
 {
   "name": "gira-homeserver-sonos-api",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "HTTP bridge that lets a Gira HomeServer logic module control Sonos players via the local UPnP/SOAP API",
   "main": "src/server.js",
   "type": "commonjs",

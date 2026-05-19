@@ -1,43 +1,64 @@
 # Gira HomeServer Sonos API Bridge
 
-A small HTTP bridge that lets a **Gira HomeServer** logic module control
-**Sonos** players reliably over the local network. The HomeServer (or any KNX
-logic that can issue an HTTP request action) calls simple REST endpoints on
-this bridge; the bridge talks to the Sonos players via the local UPnP/SOAP
-control API on port 1400.
+A Sonos integration for the **Gira HomeServer**. The bridge runs **on the
+HomeServer itself** as a systemd service — no separate machine, no extra
+hardware. It exposes:
 
-This pattern avoids the Sonos Cloud Control API entirely (no OAuth, no
-developer registration, no rate limits, no cloud dependency) while remaining
-compatible with current and **2026** Sonos firmware generations.
+- a simple HTTP API the HomeServer logic calls for play/pause/volume/radio
+  control,
+- a built-in **web configuration page** at `http://<homeserver>:8080/` where
+  players, radio stations, and the optional cloud/webhook integration are
+  managed at runtime,
+- a **UPnP event subscription** that pushes Sonos state changes (volume
+  knob turned, app paused playback, etc.) into the HomeServer without
+  polling — either via Server-Sent Events or an outbound webhook.
+
+No OAuth. No Sonos developer registration. No cloud dependency. Compatible
+with current and **2026** Sonos firmware generations.
 
 ---
 
 ## Why a bridge?
 
-Gira HomeServer logic modules cannot easily speak UPnP/SOAP directly. The
-HomeServer is comfortable issuing plain HTTP requests and parsing simple
-responses. This project provides:
+Gira HomeServer logic modules cannot speak UPnP/SOAP, run SSDP, or accept
+inbound UPnP NOTIFY callbacks. The HomeServer is comfortable issuing plain
+HTTP requests, accepting inbound POSTs on its own endpoints, and parsing
+simple responses. This project provides:
 
-1. A **bridge HTTP service** (Node.js, zero runtime dependencies) that runs on
-   any small Linux box, NAS, Raspberry Pi, or the HomeServer's companion
-   server.
-2. A set of **HomeServer logic module assets** — HTTP request templates,
-   receive parser definitions, KNX group address mapping guidance — that the
-   integrator imports into the HS Experte.
+1. A **bridge HTTP service** (Node.js 18+, zero npm dependencies) that runs
+   directly on the HomeServer's Linux OS as a systemd service. See
+   [homeserver/install/install.sh](homeserver/install/install.sh).
+2. A built-in **web configuration page** served at the bridge root URL so
+   the entire integration is managed from the browser — no editing JSON
+   files by hand. The page can be linked from the HomeServer visualisation
+   or embedded in an iframe.
+3. A set of **HomeServer logic module assets** — HTTP request templates,
+   receive parser definitions, KNX group address mapping guidance — that
+   the integrator imports into the HS Experte.
 
 ---
 
 ## Features
 
-- Local-only operation (no cloud, no OAuth)
-- Player and group selection via configuration
-- Core playback control: play, pause, stop, next, previous
+- **Runs on the HomeServer itself** (systemd service, single device)
+- **Web configuration UI** at `http://<homeserver>:8080/` — players, radio
+  stations, webhook, cloud, all editable from the browser, no file edits
+- **UPnP event push** (subscribes to AVTransport + RenderingControl, handles
+  NOTIFY callbacks, renews subscriptions automatically)
+- **Outbound webhook** to push state changes to a HomeServer inbound URL,
+  enabling event-driven KNX updates without polling
+- **Server-Sent Events** stream at `/events` for live state in the admin UI
+  or any other consumer
+- `/info` endpoint that returns the bridge URL — useful for surfacing the
+  config-page URL on the HomeServer homepage / debug page
+- Local-only operation (no cloud, no OAuth); optional Sonos Cloud Control
+  API fallback is wired into the config UI
+- Player selection via configuration; SSDP auto-discovery on the LAN
+- Core playback: play, pause, stop, next, previous
 - Volume: set / up / down / mute / unmute / mute toggle
-- Radio station playback by index or by name, with a fully configurable
-  station list
+- Radio station playback by index or by name, fully configurable
 - Aggregated status: online state, playback state, current track metadata,
   volume, mute, active radio station, current URI
-- SSDP auto-discovery endpoint to find Sonos players on the LAN
 - Graceful handling of offline players, malformed input, and Sonos SOAP faults
 - Structured JSON logging with secret redaction
 - Optional bearer-token auth for the bridge HTTP API
@@ -47,57 +68,59 @@ responses. This project provides:
 
 ---
 
-## Quick start
+## Quick start — install on the HomeServer
 
-### 1. Install Node.js 18+ on the host that will run the bridge
-
-```sh
-node --version   # must be >= 18
-```
-
-### 2. Clone & configure
+The recommended deployment is **directly on the HomeServer**. SSH into the
+HomeServer as root and run:
 
 ```sh
-git clone <this-repo>
-cd Gira-Homeserver-SONOS-API
-cp config.example.json config.json
-$EDITOR config.json    # adjust players + radio stations
+git clone <this-repo> /tmp/sonos-bridge
+sh /tmp/sonos-bridge/homeserver/install/install.sh
 ```
 
-### 3. Discover your players (optional)
+The installer:
 
-If you don't know the IP addresses of your Sonos players, run the bridge once
-without players configured and call the discover endpoint:
+- creates the system user `sonos-bridge`,
+- copies the source to `/opt/sonos-bridge`,
+- writes `/etc/sonos-bridge/config.json` from the example,
+- installs and starts the systemd service.
 
-```sh
-SONOS_BRIDGE_CONFIG=config.json node src/server.js &
-curl http://localhost:8080/players/discover
-```
+Logs: `journalctl -u sonos-bridge -f`.
 
-Copy the resulting `host` / `uuid` values into `config.json` under
-`players[]`.
+### Open the configuration page
 
-### 4. Run
+In a browser, open `http://<homeserver-ip>:8080/`. From there you can:
 
-```sh
-npm start
-```
+- add / remove Sonos players (or click **Discover** to auto-find them via SSDP),
+- add / remove radio stations,
+- configure the webhook URL the bridge POSTs state changes to,
+- enable the optional Sonos Cloud Control API integration,
+- watch the live event stream coming in from UPnP subscriptions.
 
-### 5. Test from a terminal
+### Surface the URL on the HomeServer
 
-```sh
-curl -X POST http://localhost:8080/players/livingroom/play
-curl -X POST http://localhost:8080/players/livingroom/volume -d '{"level":30}' -H 'Content-Type: application/json'
-curl -X POST http://localhost:8080/players/livingroom/radio/start -d '{"index":1}' -H 'Content-Type: application/json'
-curl       http://localhost:8080/players/livingroom/status
-```
+See [homeserver/HOMEPAGE.md](homeserver/HOMEPAGE.md) for how to add the
+configuration page URL to the HomeServer visualisation as a tile or
+iframe, and how to use `/info` to dynamically display the URL on a wall
+panel or debug page.
 
-### 6. Wire up the Gira HomeServer
+### Wire up KNX
 
 See [homeserver/SETUP.md](homeserver/SETUP.md) for HS Experte configuration,
 [homeserver/REQUESTS.md](homeserver/REQUESTS.md) for HTTP request templates,
 and [homeserver/KNX-MAPPING.md](homeserver/KNX-MAPPING.md) for KNX group
 address mapping.
+
+### Or run elsewhere (developer mode)
+
+```sh
+git clone <this-repo>
+cd Gira-Homeserver-SONOS-API
+cp config.example.json config.json
+npm start
+```
+
+Then open `http://localhost:8080/`.
 
 ---
 
@@ -140,6 +163,19 @@ All configuration lives in a single JSON file (default `config.json`). See
 
 | Method | Path | Body | Description |
 | --- | --- | --- | --- |
+| GET | `/` | – | Web configuration UI (HTML) |
+| GET | `/info` | – | Bridge metadata incl. URL — used by HS homepage |
+| GET | `/events` | – | Server-Sent Events stream of state changes |
+| NOTIFY | `/upnp/event/:player/:service` | UPnP XML | Sonos pushes events here |
+| GET | `/api/config` | – | Current config (secrets redacted) |
+| PUT | `/api/config` | partial cfg | Patch + persist config |
+| GET | `/api/players/full` | – | Players + live state from cache |
+| POST | `/api/players` | `{name,host,...}` | Add a player and persist |
+| DELETE | `/api/players/:name` | – | Remove a player and persist |
+| POST | `/api/stations` | `{index,name,streamUri}` | Add a radio station |
+| DELETE | `/api/stations/:index` | – | Remove a radio station |
+| POST | `/api/webhook/test` | – | Send a test event to the webhook URL |
+| POST | `/api/events/resubscribe` | – | Force UPnP re-subscribe to all players |
 | GET | `/health` | – | Bridge liveness + player count |
 | GET | `/players` | – | List configured players |
 | GET | `/players/discover` | – | SSDP discovery (returns Sonos units on LAN) |
@@ -240,25 +276,35 @@ Tests use a mocked SOAP transport — no Sonos hardware needed.
 
 ```
 src/
-  server.js             HTTP server, routing, request validation
-  config.js             JSON config loader + validator
-  players.js            Player registry (name → SonosClient)
-  radio.js              Radio station store
-  logger.js             Structured JSON logger
+  server.js              HTTP server, routing, NOTIFY handler, SSE, auth
+  config.js              JSON config loader + validator
+  persist.js             Atomic config write-back
+  players.js             Player registry (name → SonosClient)
+  radio.js               Radio station store
+  state.js               In-memory state cache, event emitter
+  webhook.js             Outbound webhook publisher
+  admin-ui.js            Single-file vanilla JS configuration UI
+  logger.js              Structured JSON logger
   sonos/
-    soap.js             SOAP envelope build/parse, HTTP transport
-    client.js           High-level Sonos commands + metadata fallback
-    discovery.js        SSDP discovery (multi-target)
+    soap.js              SOAP envelope build/parse, HTTP transport
+    client.js            High-level Sonos commands + metadata fallback
+    discovery.js         SSDP discovery (multi-target)
+    events.js            UPnP SUBSCRIBE/RENEW/NOTIFY parsing
 test/
-  *.test.js             node --test suites
-  helpers/mock-sonos.js Mocked Sonos SOAP transport
+  *.test.js              node --test suites (61 tests)
+  helpers/mock-sonos.js  Mocked Sonos SOAP transport
 homeserver/
-  SETUP.md              HS Experte setup
-  REQUESTS.md           HTTP request templates
-  KNX-MAPPING.md        KNX group address mapping guidance
+  install/
+    install.sh           Installer for HomeServer-hosted deployment
+    sonos-bridge.service systemd unit
+  SETUP.md               HS Experte setup
+  REQUESTS.md            HTTP request templates
+  KNX-MAPPING.md         KNX group address mapping guidance
+  HOMEPAGE.md            How to surface the bridge URL on the HS homepage
 docs/
   TROUBLESHOOTING.md
   ARCHITECTURE.md
+  MANUAL-VERIFICATION.md
 config.example.json
 ```
 

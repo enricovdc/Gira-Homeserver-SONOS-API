@@ -52,6 +52,16 @@ class PlayerRegistry {
   has(name) {
     return this.byName.has(String(name || '').toLowerCase());
   }
+
+  unregister(name) {
+    const key = String(name || '').toLowerCase();
+    const existed = this.byName.delete(key);
+    if (this.defaultName && this.defaultName.toLowerCase() === key) {
+      const next = this.byName.values().next().value;
+      this.defaultName = next ? next.name : null;
+    }
+    return existed;
+  }
 }
 
 module.exports = { PlayerRegistry, PlayerError };

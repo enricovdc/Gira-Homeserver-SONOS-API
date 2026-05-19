@@ -1,0 +1,38 @@
+[Unit]
+Description=Gira HomeServer Sonos Bridge
+Documentation=https://github.com/enricovdc/gira-homeserver-sonos-api
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Run as a non-root user. Create the user with:
+#   useradd -r -d /opt/sonos-bridge -s /usr/sbin/nologin sonos-bridge
+User=sonos-bridge
+Group=sonos-bridge
+WorkingDirectory=/opt/sonos-bridge
+Environment=NODE_ENV=production
+Environment=SONOS_BRIDGE_CONFIG=/etc/sonos-bridge/config.json
+ExecStart=/usr/bin/node /opt/sonos-bridge/src/server.js
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ReadWritePaths=/etc/sonos-bridge
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target

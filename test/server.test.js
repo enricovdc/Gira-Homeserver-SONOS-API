@@ -47,6 +47,7 @@ function makeCfg(overrides = {}) {
       { index: 1, name: 'R1', streamUri: 'http://r1' },
       { index: 2, name: 'R2', streamUri: 'http://r2' }
     ],
+    eventing: { enabled: false },
     ...overrides
   });
 }
@@ -56,7 +57,7 @@ async function withServer(opts, fn) {
   const { SonosClient } = require('../src/sonos/client');
   const requestFn = createMockRequest(opts.handlers || {});
   const clientFactory = (cfgIn) => new SonosClient({ ...cfgIn, requestFn });
-  const { server } = await startServer(cfg, { clientFactory });
+  const { server } = await startServer(cfg, { clientFactory, disableEventing: true });
   const port = server.address().port;
   try {
     await fn(port, requestFn);
