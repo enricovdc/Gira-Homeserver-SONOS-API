@@ -659,7 +659,13 @@ button:disabled { background-color: #d0d0d0; color: #505050; cursor: not-allowed
 button.danger   { background-color: #a83232; min-width: 36px; padding: 0 10px; }
 button.danger:hover  { background-color: #BACE00; color: #323232; }
 button.secondary     { background-color: #707070; }
-button.small         { min-width: 80px; height: 28px; font-size: 11px; padding: 0 12px; margin: 0 4px 0 0; }
+button.small         { min-width: 0; height: 28px; font-size: 11px; padding: 0 12px; margin: 0 4px 0 0; }
+/* Force action-button rows to stay on one line so the Edit + Remove
+   pair next to each Group preset doesn't wrap into a column. */
+#groups td:last-child, .pc-actions { white-space: nowrap; }
+#groups td:last-child button.small, .pc-actions button.small {
+  display: inline-block; vertical-align: middle;
+}
 
 /* Inline form row under each table */
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
@@ -1118,19 +1124,21 @@ document.addEventListener('click', async (ev) => {
       editTr.style.display = 'none';
       refreshGroups();
     }
-    // Member chip click on the chip itself (when not directly on the checkbox)
-    if (t.classList && t.classList.contains('member-chip')) {
-      const cb = t.querySelector('input[type=checkbox]');
-      if (cb && ev.target.tagName !== 'INPUT') {
-        cb.checked = !cb.checked;
-        t.classList.toggle('on', cb.checked);
-      }
-    }
-    // Member chip checkbox toggle — sync visual
-    if (t.tagName === 'INPUT' && t.type === 'checkbox' && t.closest('.member-chip')) {
-      t.closest('.member-chip').classList.toggle('on', t.checked);
-    }
+    // Member-chip handling is done via the native <label><input> click
+    // (browser toggles the checkbox + fires change) plus a 'change'
+    // listener that syncs the .on class — no manual click toggling here,
+    // otherwise we'd double-toggle and the chip looks unresponsive.
   } catch (e) { toast(e.message, true); }
+});
+
+// Sync the visual highlight on member chips whenever their hidden
+// checkbox changes — runs for clicks on either the label or the input.
+document.addEventListener('change', (ev) => {
+  const t = ev.target;
+  if (t.tagName === 'INPUT' && t.type === 'checkbox') {
+    const chip = t.closest('.member-chip');
+    if (chip) chip.classList.toggle('on', t.checked);
+  }
 });
 
 document.getElementById('ng-add').addEventListener('click', async () => {
@@ -1638,6 +1646,13 @@ class LogicModule:
         # Register this instance for cross-LBS access.
         _admin_instance_ref["instance"] = self
 
+        # Restore registries from HSL3 retentive stores before the first
+        # tick. SSDP scans that come in later will MERGE on top — they
+        # never overwrite manual entries or zone-name edits, so a
+        # partially-incomplete startup scan can't lose the work the user
+        # already put in.
+        self._load_persisted(store)
+
         # Arm the discovery tick.
         self.fw.set_timer("Tick", 10)
         self._publish_counters()
@@ -1706,6 +1721,11 @@ class LogicModule:
         self.fw.set_output("DiscoveredPlayers", text.encode("iso-8859-15", "replace"))
         self.fw.set_output("LastDiscoveryCount", float(n))
         self._publish_counters()
+        # Snapshot to retentive stores so a HomeServer restart inherits
+        # the most recent discovery state. Discovery only ever adds /
+        # refreshes records (never removes), so even a partial scan is
+        # safe to persist.
+        self._persist()
 
     def _publish_counters(self):
         with _registry_lock:
@@ -1728,6 +1748,101 @@ class LogicModule:
         path that runs on the HTTP server thread (every REST handler) —
         calling set_output from a worker thread raises Hsl3ContextError."""
         self.fw.run_in_context(self._publish_counters, ())
+
+    # ----- Persistence to HSL3 retentive stores ---------------------------
+
+    def _load_persisted(self, store):
+        """Restore registry state from the four retentive stores. Called
+        from on_init, which is the only context that receives the
+        ``store`` Hsl3Slots object. Failures (missing stores, malformed
+        JSON) are swallowed so a corrupted store can never block startup
+        — the registries simply start empty and the next discovery /
+        UI add re-populates them. Source flag for restored SSDP entries
+        is left as 'ssdp' so re-discovery merges them in place rather
+        than appending a duplicate."""
+        def _read_str(key):
+            try:
+                v = store[key].value
+            except Exception:
+                return ""
+            if isinstance(v, bytes):
+                try:
+                    return v.decode("iso-8859-15", errors="replace")
+                except Exception:
+                    return ""
+            return v or ""
+
+        def _safe_json(s, fallback):
+            if not s:
+                return fallback
+            try:
+                return json.loads(s)
+            except (ValueError, TypeError):
+                return fallback
+
+        with _registry_lock:
+            for rec in _safe_json(_read_str("PersistedPlayers"), []):
+                if isinstance(rec, dict) and rec.get("id"):
+                    _players[rec["id"]] = rec
+            for rec in _safe_json(_read_str("PersistedStations"), []):
+                if isinstance(rec, dict) and rec.get("id"):
+                    _stations[rec["id"]] = rec
+            for rec in _safe_json(_read_str("PersistedGroups"), []):
+                if isinstance(rec, dict) and rec.get("id"):
+                    _groups[rec["id"]] = rec
+            cloud_data = _safe_json(_read_str("PersistedCloud"), {})
+            if isinstance(cloud_data, dict):
+                for k in ("clientId", "clientSecret", "redirectBase",
+                          "accessToken", "refreshToken"):
+                    v = cloud_data.get(k)
+                    if isinstance(v, str):
+                        _cloud[k] = v
+                exp = cloud_data.get("expiresAt")
+                try:
+                    if exp is not None:
+                        _cloud["expiresAt"] = float(exp)
+                except (TypeError, ValueError):
+                    pass
+
+    def _persist(self):
+        """Serialize the four registries to retentive stores. Must run in
+        node context (set_store is a node-context API). Records are
+        encoded as compact JSON then iso-8859-15 bytes per the HSL3 SDK
+        string-output contract."""
+        with _registry_lock:
+            try:
+                p = json.dumps(list(_players.values()), separators=(",", ":"))
+                s = json.dumps(list(_stations.values()), separators=(",", ":"))
+                g = json.dumps(list(_groups.values()), separators=(",", ":"))
+                c = json.dumps(_cloud, separators=(",", ":"))
+            except (TypeError, ValueError) as exc:
+                # Should never happen — every record is plain str/int/bool/
+                # list/dict — but never let a JSON encode failure break the
+                # web UI. Log and skip the persist for this cycle.
+                try:
+                    self.logger.warning("Persist serialization failed: %s", exc)
+                except Exception:
+                    pass
+                return
+        try:
+            self.fw.set_store("PersistedPlayers",  p.encode("iso-8859-15", "replace"))
+            self.fw.set_store("PersistedStations", s.encode("iso-8859-15", "replace"))
+            self.fw.set_store("PersistedGroups",   g.encode("iso-8859-15", "replace"))
+            self.fw.set_store("PersistedCloud",    c.encode("iso-8859-15", "replace"))
+        except Exception as exc:  # noqa: BLE001
+            try:
+                self.logger.warning("Persist set_store failed: %s", exc)
+            except Exception:
+                pass
+
+    def _sync_async(self):
+        """Convenience for HTTP-thread mutations: re-publish counters AND
+        persist the registries to stores. One run_in_context call ensures
+        both happen atomically in node context."""
+        def _do():
+            self._publish_counters()
+            self._persist()
+        self.fw.run_in_context(_do, ())
 
     def _write_error(self, msg):
         self.fw.set_output("LastError", msg.encode("iso-8859-15", "replace"))
@@ -1816,7 +1931,7 @@ class LogicModule:
         }
         with _registry_lock:
             _players[rec["id"]] = rec
-        self._publish_counters_async()
+        self._sync_async()
         return {"ok": True, "player": rec}
 
     def api_remove_player(self, pid):
@@ -1824,7 +1939,7 @@ class LogicModule:
             removed = _players.pop(pid, None)
         if removed is None:
             raise ValueError("unknown player id")
-        self._publish_counters_async()
+        self._sync_async()
         return {"ok": True}
 
     def api_update_player(self, pid, body):
@@ -1844,6 +1959,7 @@ class LogicModule:
                 if body["mac"] and not v:
                     raise ValueError("invalid MAC")
                 rec["mac"] = v
+        self._sync_async()
         return {"ok": True}
 
     def api_discover_now(self):
@@ -1865,7 +1981,7 @@ class LogicModule:
         rec = {"id": sid, "name": name, "uri": uri, "metadata": metadata}
         with _registry_lock:
             _stations[sid] = rec
-        self._publish_counters_async()
+        self._sync_async()
         return {"ok": True, "station": rec}
 
     def api_player_favorites(self, pid):
@@ -1923,6 +2039,7 @@ class LogicModule:
                 rec["metadata"] = body["metadata"] or ""
             if "uri" in body:
                 rec["uri"] = (body["uri"] or "").strip()
+        self._sync_async()
         return {"ok": True}
 
     def api_remove_station(self, sid):
@@ -1930,7 +2047,7 @@ class LogicModule:
             removed = _stations.pop(sid, None)
         if removed is None:
             raise ValueError("unknown station id")
-        self._publish_counters_async()
+        self._sync_async()
         return {"ok": True}
 
     # ----- Group presets ---------------------------------------------------
@@ -1965,7 +2082,7 @@ class LogicModule:
             gid = "g_" + str(int(time.time() * 1000))
             rec = {"id": gid, "name": name, "master": master, "members": members}
             _groups[gid] = rec
-        self._publish_counters_async()
+        self._sync_async()
         return {"ok": True, "group": rec}
 
     def api_update_group(self, gid, body):
@@ -1992,6 +2109,7 @@ class LogicModule:
                     if pid not in known:
                         raise ValueError("unknown player id: {}".format(pid))
                 rec["members"] = [m for m in v if m != rec.get("master")]
+        self._sync_async()
         return {"ok": True, "group": rec}
 
     def api_remove_group(self, gid):
@@ -1999,7 +2117,7 @@ class LogicModule:
             removed = _groups.pop(gid, None)
         if removed is None:
             raise ValueError("unknown group id")
-        self._publish_counters_async()
+        self._sync_async()
         return {"ok": True}
 
     def api_get_cloud(self):
@@ -2025,6 +2143,7 @@ class LogicModule:
                 _cloud["clientSecret"] = (body["clientSecret"] or "").strip()
             if "redirectBase" in body:
                 _cloud["redirectBase"] = (body["redirectBase"] or "").rstrip("/")
+        self._sync_async()
         return {"ok": True}
 
     def oauth_start_params(self):
@@ -2074,8 +2193,8 @@ class LogicModule:
             _cloud["accessToken"] = access
             _cloud["refreshToken"] = refresh
             _cloud["expiresAt"] = time.time() + expires_in
-        # Update outputs.
-        self.fw.run_in_context(self._publish_counters, ())
+        # Update outputs + persist the new tokens.
+        self._sync_async()
         return True, "Sonos Cloud authorized for {} seconds".format(expires_in)
 
 

@@ -8,6 +8,7 @@ nothing reaches a real Sonos player.
 """
 
 import importlib.util
+import json
 import os
 import sys
 import threading
@@ -93,6 +94,7 @@ class StubFramework:
         self.outputs = {}
         self.stores = {}
         self.timers = {}
+        self.stores = {}
         self._debug = StubDebug()
         self._logger = StubLogger()
         # When True, run_in_context dispatches synchronously so tests can
@@ -669,6 +671,88 @@ class TestSonosAdmin(unittest.TestCase):
         lm.api_remove_station(sid)
         with self.mod._registry_lock:
             self.assertEqual(len(self.mod._stations), 0)
+
+    def test_persist_and_load_round_trip(self):
+        """Registries serialise to retentive stores and restore on load.
+        Survives a 'restart' (clear in-memory, build a stub store with
+        the bytes that were set, call _load_persisted)."""
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        # Set up state.
+        with self.mod._registry_lock:
+            self.mod._players["p1"] = {"id": "p1", "name": "lr",
+                "zoneName": "Living Room", "ip": "10.0.0.1", "mac": "",
+                "uuid": "RINCON_LR", "model": "PLAY:5", "source": "ssdp"}
+            self.mod._stations["s1"] = {"id": "s1", "name": "BBC R1",
+                "uri": "http://r1", "metadata": "<DIDL/>"}
+            self.mod._groups["g1"] = {"id": "g1", "name": "All",
+                "master": "p1", "members": []}
+            self.mod._cloud["clientId"] = "abc"
+            self.mod._cloud["clientSecret"] = "topsecret"
+        # Persist (runs synchronously in test because run_in_context is sync).
+        lm._persist()
+        # Captured store bytes.
+        self.assertIn("PersistedPlayers", fw.stores)
+        self.assertIn("PersistedStations", fw.stores)
+        self.assertIn("PersistedGroups", fw.stores)
+        self.assertIn("PersistedCloud", fw.stores)
+        # Each value is iso-8859-15 bytes containing JSON.
+        self.assertIsInstance(fw.stores["PersistedPlayers"], bytes)
+        # Wipe registries to simulate a fresh start.
+        with self.mod._registry_lock:
+            self.mod._players.clear()
+            self.mod._stations.clear()
+            self.mod._groups.clear()
+            for k in list(self.mod._cloud.keys()):
+                if isinstance(self.mod._cloud[k], str):
+                    self.mod._cloud[k] = ""
+        # Build a stub store object that returns the captured bytes.
+        class _Slot:
+            def __init__(self, v): self.value = v
+        class _Store(dict):
+            def __getitem__(self, k): return _Slot(fw.stores.get(k, b""))
+        lm._load_persisted(_Store())
+        # Registries are back.
+        with self.mod._registry_lock:
+            self.assertIn("p1", self.mod._players)
+            self.assertEqual(self.mod._players["p1"]["zoneName"], "Living Room")
+            self.assertIn("s1", self.mod._stations)
+            self.assertEqual(self.mod._stations["s1"]["metadata"], "<DIDL/>")
+            self.assertIn("g1", self.mod._groups)
+            self.assertEqual(self.mod._groups["g1"]["master"], "p1")
+            self.assertEqual(self.mod._cloud["clientId"], "abc")
+            self.assertEqual(self.mod._cloud["clientSecret"], "topsecret")
+
+    def test_load_persisted_tolerates_garbage(self):
+        """Malformed JSON must NOT crash on_init — registries start empty
+        and the next discovery / UI add re-populates them."""
+        class _Slot:
+            def __init__(self, v): self.value = v
+        class _Store:
+            def __init__(self, d): self._d = d
+            def __getitem__(self, k): return _Slot(self._d.get(k, b""))
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        with self.mod._registry_lock:
+            self.mod._players.clear()
+            self.mod._stations.clear()
+            self.mod._groups.clear()
+        # Mix of empty, garbage, and one valid blob.
+        valid_player = json.dumps([{"id": "x", "name": "X", "zoneName": "X",
+            "ip": "1.1.1.1", "mac": "", "uuid": "U", "model": "", "source": "ssdp"}])
+        store = _Store({
+            "PersistedPlayers":  valid_player.encode("iso-8859-15"),
+            "PersistedStations": b"not json {{{{",
+            "PersistedGroups":   b"",
+            "PersistedCloud":    b"\xff\xfe garbage",
+        })
+        lm._load_persisted(store)  # must not raise
+        with self.mod._registry_lock:
+            self.assertEqual(len(self.mod._players), 1)
+            self.assertEqual(len(self.mod._stations), 0)
+            self.assertEqual(len(self.mod._groups), 0)
 
     def test_admin_group_crud_and_lookup(self):
         """Group presets: add, list, get by index, get by name,

@@ -25,7 +25,12 @@
       { "type": "number", "identifier": "LastDiscoveryCount",  "init_value": 0,  "label": "Last Scan Count" },
       { "type": "string", "identifier": "LastError",           "init_value": "", "label": "Last Error" }
     ],
-    "stores": [],
+    "stores": [
+      { "type": "string", "identifier": "PersistedPlayers",  "init_value": "" },
+      { "type": "string", "identifier": "PersistedStations", "init_value": "" },
+      { "type": "string", "identifier": "PersistedGroups",   "init_value": "" },
+      { "type": "string", "identifier": "PersistedCloud",    "init_value": "" }
+    ],
     "timers": [
       { "identifier": "Tick" }
     ],
