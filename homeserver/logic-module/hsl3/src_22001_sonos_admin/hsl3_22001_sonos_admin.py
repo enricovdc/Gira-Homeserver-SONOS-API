@@ -363,6 +363,7 @@ INDEX_HTML = r"""<!doctype html>
 <style>
 /* Gira HomeServer base palette + typography, mirrored from /main-site/hs.css */
 html { overflow-y: scroll; }
+*, *::before, *::after { box-sizing: border-box; }
 body { margin: 0; background-color: rgb(230,230,230); color: rgb(32,32,32);
        font-family: 'Univers Next W1G', 'Verdana', 'Helvetica', 'Arial', sans-serif;
        font-size: 12px; padding: 0; }
@@ -376,7 +377,7 @@ a  { color: #969696; text-decoration: none; }
 @media only screen and (max-width: 1023px) {
   .container { width: auto; }
 }
-.content { background-color: white; }
+.content { background-color: white; min-width: 0; overflow-x: hidden; }
 .header  { margin: 0 30px; border-bottom: 1px solid #c0c0c0;
            margin-bottom: 30px; padding: 37px 0; }
 .header > img { display: inline-block; width: 120px; height: 30px;
@@ -435,7 +436,37 @@ button.small         { min-width: 80px; height: 28px; font-size: 11px; padding: 
 .toast.error { background: #a83232; }
 
 code { background: #f5f5f5; padding: 1px 6px; border: 1px solid #e8e8e8;
-       font-family: ui-monospace, 'Courier New', monospace; font-size: 0.85em; }
+       font-family: ui-monospace, 'Courier New', monospace; font-size: 0.85em;
+       word-break: break-all; }
+
+/* Player card list: one block per Sonos player, laid out so the wide
+   UUID can wrap inside its container instead of pushing the table
+   beyond the 939px Gira frame. */
+.player-list { border-top: 1px solid #c0c0c0; }
+.player-card { border-bottom: 1px solid #c0c0c0; padding: 12px 0; }
+.player-card .pc-head { display: flex; align-items: baseline; gap: 12px;
+                        margin-bottom: 6px; flex-wrap: wrap; }
+.player-card .pc-zone { font-size: 14px; font-weight: 400; color: #202020;
+                        flex: 1 1 auto; min-width: 0; }
+.player-card .pc-zone:empty::before { content: "(no Sonos zone name)";
+                                      color: #a0a0a0; font-style: italic; }
+.player-card .pc-uuid { font-family: ui-monospace, 'Courier New', monospace;
+                        font-size: 11px; color: #707070; word-break: break-all; }
+.player-card .pc-grid { display: grid; gap: 6px 16px; align-items: center;
+                        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr)
+                                               minmax(0, 1fr) auto; }
+.player-card .pc-field { min-width: 0; }
+.player-card .pc-field label { display: block; font-size: 11px; color: #808080;
+                               margin-bottom: 2px; }
+.player-card .pc-field input { width: 100%; }
+.player-card .pc-actions { display: flex; gap: 4px; align-items: end; }
+.player-card .pc-meta { margin-top: 6px; font-size: 11px; color: #808080;
+                        display: flex; gap: 12px; flex-wrap: wrap; }
+.player-card .pc-meta .pc-model { color: #505050; }
+@media only screen and (max-width: 720px) {
+  .player-card .pc-grid { grid-template-columns: 1fr 1fr; }
+  .player-card .pc-actions { grid-column: 1 / -1; justify-content: flex-end; }
+}
 
 /* Two-column "grid" used by the Cloud section */
 .grid { display: grid; grid-template-columns: 224px 1fr; gap: 6px 12px;
@@ -466,18 +497,7 @@ code { background: #f5f5f5; padding: 1px 6px; border: 1px solid #e8e8e8;
        prefer the <strong>UUID</strong> (stable across firmware updates and
        DHCP renumbering). Click the <em>Use as Host</em> button on a row to
        copy a value to the clipboard.</p>
-    <table id="players">
-      <thead><tr>
-        <th style="width:16%">Zone (Sonos)</th>
-        <th style="width:14%">Custom name</th>
-        <th style="width:18%">UUID</th>
-        <th style="width:13%">IP</th>
-        <th style="width:14%">MAC</th>
-        <th style="width:10%">Model</th>
-        <th style="width:7%">Src</th>
-        <th style="width:8%">Actions</th>
-      </tr></thead><tbody></tbody>
-    </table>
+    <div id="players" class="player-list"></div>
     <div class="row">
       <input id="np-name" placeholder="name (e.g. livingroom)" style="max-width: 180px">
       <input id="np-ip"   placeholder="IP (optional if MAC given)" style="max-width: 160px">
@@ -556,29 +576,50 @@ function esc(s) {
 }
 async function refreshPlayers() {
   const r = await api('GET', '/api/players');
-  const tbody = document.querySelector('#players tbody');
-  tbody.innerHTML = '';
+  const list = document.getElementById('players');
+  list.innerHTML = '';
   for (const p of r.players) {
-    const tr = document.createElement('tr');
     const zone = p.zoneName || '';
     const uuid = p.uuid || '';
-    // The "Use as Host" button copies the most stable identifier
-    // available (UUID > MAC > IP) into the clipboard for pasting into
-    // the Sonos Player block's Host input.
+    // The "Use as Host" button copies the most stable identifier available
+    // (UUID > MAC > IP) into the clipboard for pasting into the Sonos
+    // Player block's Host input.
     const hostValue = uuid || p.mac || p.ip || '';
-    tr.innerHTML =
-      '<td><strong>' + esc(zone) + '</strong></td>' +
-      '<td><input data-edit="' + esc(p.id) + '" data-field="name" value="' + esc(p.name) + '" placeholder="(none)"></td>' +
-      '<td><code style="font-size: 0.78em">' + esc(uuid) + '</code></td>' +
-      '<td><input data-edit="' + esc(p.id) + '" data-field="ip"   value="' + esc(p.ip)   + '"></td>' +
-      '<td><input data-edit="' + esc(p.id) + '" data-field="mac"  value="' + esc(p.mac)  + '"></td>' +
-      '<td>' + esc(p.model || '') + '</td>' +
-      '<td><span class="pill ' + esc(p.source) + '">' + esc(p.source) + '</span></td>' +
-      '<td>' +
-        '<button class="secondary small" data-host="' + esc(hostValue) + '" title="Copy Host value">Use as Host</button>' +
-        '<button class="danger small" data-del-player="' + esc(p.id) + '">x</button>' +
-      '</td>';
-    tbody.appendChild(tr);
+    const card = document.createElement('div');
+    card.className = 'player-card';
+    card.innerHTML =
+      '<div class="pc-head">' +
+        '<div class="pc-zone">' + esc(zone) + '</div>' +
+        '<span class="pill ' + esc(p.source) + '">' + esc(p.source) + '</span>' +
+      '</div>' +
+      '<div class="pc-uuid">' + (uuid ? esc(uuid) : '<em>no UUID yet</em>') + '</div>' +
+      '<div class="pc-grid" style="margin-top:8px">' +
+        '<div class="pc-field">' +
+          '<label>Custom name</label>' +
+          '<input data-edit="' + esc(p.id) + '" data-field="name" value="' + esc(p.name) + '" placeholder="(none)">' +
+        '</div>' +
+        '<div class="pc-field">' +
+          '<label>IP</label>' +
+          '<input data-edit="' + esc(p.id) + '" data-field="ip" value="' + esc(p.ip) + '">' +
+        '</div>' +
+        '<div class="pc-field">' +
+          '<label>MAC</label>' +
+          '<input data-edit="' + esc(p.id) + '" data-field="mac" value="' + esc(p.mac) + '">' +
+        '</div>' +
+        '<div class="pc-actions">' +
+          '<button class="secondary small" data-host="' + esc(hostValue) + '" title="Copy Host value">Use as Host</button>' +
+          '<button class="danger small" data-del-player="' + esc(p.id) + '" title="Remove">x</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="pc-meta">' +
+        (p.model ? '<span class="pc-model">' + esc(p.model) + '</span>' : '') +
+      '</div>';
+    list.appendChild(card);
+  }
+  if (r.players.length === 0) {
+    list.innerHTML = '<div class="player-card" style="text-align:center;color:#808080">' +
+      'No players yet. Click <strong>Scan now (SSDP)</strong> or add one manually below.' +
+      '</div>';
   }
   document.getElementById('players-state').textContent =
     r.players.length + ' player(s); last scan ' + (r.lastDiscoveryAt || 'never') + '.';
