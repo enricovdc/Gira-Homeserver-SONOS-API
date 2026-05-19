@@ -36,6 +36,7 @@
       { "type": "string", "identifier": "Station8Uri",   "init_value": "",  "label": "Radio Station 8 Stream URI" }
     ],
     "outputs": [
+      { "type": "string", "identifier": "ZoneName",      "init_value": "", "label": "Sonos Zone Name" },
       { "type": "number", "identifier": "Online",        "init_value": 0,  "label": "Online" },
       { "type": "string", "identifier": "State",         "init_value": "", "label": "Playback State" },
       { "type": "number", "identifier": "Volume",        "init_value": 0,  "label": "Volume 0-100" },
@@ -88,6 +89,7 @@
           { "label": "Radiosender 8 Stream-URI" }
         ],
         "translation_outputs": [
+          { "label": "Sonos Zonen-Name" },
           { "label": "Online" },
           { "label": "Wiedergabestatus" },
           { "label": "Lautstaerke 0-100" },

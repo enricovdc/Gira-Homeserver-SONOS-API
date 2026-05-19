@@ -706,6 +706,38 @@ class TestPlayerStationFromAdmin(unittest.TestCase):
         self.assertEqual(rec["uri"], "x-sonosapi-stream:s24939")
         self.assertIn("SA_RINCON65031", rec["metadata"])
 
+    def test_admin_get_player_record_by_ip_mac_uuid_name(self):
+        """LBS 22000's ZoneName output sources via this helper. Must
+        resolve by every identifier the integrator might use in Host."""
+        with self.admin._registry_lock:
+            self.admin._players["x"] = {
+                "id": "x", "name": "lr", "zoneName": "Living Room",
+                "ip": "10.0.0.50", "mac": "00:0e:58:ab:cd:ef",
+                "uuid": "RINCON_AABBCC", "model": "PLAY:5", "source": "ssdp",
+            }
+        for spec in ("10.0.0.50", "00:0E:58:AB:CD:EF", "RINCON_AABBCC", "lr", "LR"):
+            rec = self.admin.get_player_record(spec)
+            self.assertIsNotNone(rec, spec)
+            self.assertEqual(rec["zoneName"], "Living Room")
+        self.assertIsNone(self.admin.get_player_record("nothing"))
+        self.assertIsNone(self.admin.get_player_record(""))
+
+    def test_player_fetches_zone_name_from_admin_registry(self):
+        """Player module's _admin_player_record walks sys.modules for
+        the Admin's get_player_record. With Admin loaded and a known
+        player, zoneName must reach the Player as iso-8859-15 bytes."""
+        with self.admin._registry_lock:
+            self.admin._players["k"] = {
+                "id": "k", "name": "", "zoneName": "Kitchen",
+                "ip": "10.0.0.7", "mac": "", "uuid": "RINCON_KK",
+                "model": "One", "source": "ssdp",
+            }
+        rec = self.player._admin_player_record("RINCON_KK")
+        self.assertIsNotNone(rec)
+        self.assertEqual(rec["zoneName"], "Kitchen")
+        # And the to_iso_bytes helper converts it correctly for set_output.
+        self.assertEqual(self.player.to_iso_bytes("Kitchen"), b"Kitchen")
+
     def test_lookup_station_by_name_case_insensitive(self):
         """StartRadioName lookup goes through _lookup_station_via_admin
         with a string. Must match case-insensitively."""

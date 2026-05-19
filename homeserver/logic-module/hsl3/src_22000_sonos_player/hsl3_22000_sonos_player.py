@@ -117,6 +117,27 @@ def _xml_escape(s):
              .replace("'", "&apos;"))
 
 
+def _admin_player_record(spec):
+    """Ask the Admin LBS for the full registry record for a player
+    identified by spec (IP / MAC / UUID / custom name). Returns None
+    when Admin isn't loaded or doesn't know this player."""
+    if not spec:
+        return None
+    for mod_name, mod in list(sys.modules.items()):
+        if mod is None:
+            continue
+        if "sonos_admin" in mod_name or "hsl3_22001" in mod_name:
+            fn = getattr(mod, "get_player_record", None)
+            if callable(fn):
+                try:
+                    rec = fn(spec)
+                    if rec:
+                        return rec
+                except Exception:
+                    pass
+    return None
+
+
 def _lookup_station_via_admin(idx_or_name):
     """If the Sonos Admin LBS is loaded, ask it for the full station
     record (uri + metadata + name). Returns None when Admin isn't
@@ -404,6 +425,7 @@ class LogicModule:
         self._last_mute = None
         self._last_title = ""
         self._last_artist = ""
+        self._last_zone_name = ""
         self._active_station = 0
         self._online = False
         self._stations = {}  # idx -> uri
@@ -438,6 +460,16 @@ class LogicModule:
         else:
             self.logger.warning("Could not bind NOTIFY listener; eventing disabled")
             self.debug.set("Listener port", to_iso_bytes("disabled"))
+
+        # Best-effort synchronous ZoneName from the Admin registry so the
+        # output isn't blank for the first 5 s until the Tick HTTP fetch
+        # completes. Admin lookup is just dict access — safe in node
+        # context. If Admin isn't loaded the output stays empty until the
+        # tick worker runs the HTTP fallback.
+        rec = _admin_player_record(self._host_spec)
+        if rec and rec.get("zoneName"):
+            self._last_zone_name = rec["zoneName"]
+            self.fw.set_output("ZoneName", to_iso_bytes(self._last_zone_name))
 
         # First tick after a short delay so HS finishes initialising.
         self.fw.set_timer("Tick", 5)
@@ -751,6 +783,29 @@ class LogicModule:
 
     # ----- Periodic tick ----------------------------------------------------
 
+    def _fetch_zone_name(self):
+        """Return the player's Sonos Zone Name ("Living Room"). Tries the
+        Admin registry first (cheap, no HTTP); falls back to a one-shot
+        GET against the player's UPnP device description. Returns '' on
+        all errors so an offline player just blanks the output. Runs in
+        a worker thread — never call from node context (does HTTP)."""
+        # Admin registry route (instant).
+        rec = _admin_player_record(self._host_spec) or _admin_player_record(self._host)
+        if rec and rec.get("zoneName"):
+            return rec["zoneName"]
+        # Direct fetch.
+        if not self._host:
+            return ""
+        try:
+            resp = requests.get(
+                "http://{}:1400/xml/device_description.xml".format(self._host),
+                timeout=self._http_timeout_s,
+            )
+        except Exception:
+            return ""
+        m = re.search(r"<roomName>([^<]+)</roomName>", resp.text)
+        return m.group(1) if m else ""
+
     def _tick_work(self):
         # Re-resolve the host on each tick so DHCP renumbering is picked up
         # automatically when the admin registry refreshes.
@@ -760,6 +815,13 @@ class LogicModule:
                 self._host = resolved
         if not self._host:
             return
+
+        # Refresh the player's Sonos Zone Name. Cheap (one GET); also
+        # picks up renames the user made in the Sonos app.
+        zone = self._fetch_zone_name()
+        if zone and zone != self._last_zone_name:
+            self._last_zone_name = zone
+            self.fw.run_in_context(self._publish_zone_name, ())
 
         # Status poll fallback (cheap on LAN).
         ok, body, _err = self._soap("AVTransport", "GetTransportInfo", ENV_GET_TRANSPORT)
@@ -871,6 +933,10 @@ class LogicModule:
         self.fw.set_output("Title", to_iso_bytes(self._last_title))
         self.fw.set_output("Artist", to_iso_bytes(self._last_artist))
         self.fw.set_output("ActiveStation", float(self._active_station))
+        self.fw.set_output("ZoneName", to_iso_bytes(self._last_zone_name))
+
+    def _publish_zone_name(self):
+        self.fw.set_output("ZoneName", to_iso_bytes(self._last_zone_name))
 
     def _publish_sub_state(self):
         now = time.time()

@@ -200,6 +200,36 @@ def resolve_host(spec):
     return ""
 
 
+def get_player_record(spec):
+    """Return the full registry record for a player identified by IP,
+    MAC, UUID, or custom name (case-insensitive). Returns ``None`` when
+    Admin doesn't know the player yet. LBS 22000 calls this to surface
+    ``zoneName``, ``model`` and other discovery-derived metadata on its
+    outputs."""
+    if not spec:
+        return None
+    spec = str(spec).strip()
+    if not spec:
+        return None
+    norm = _norm_mac(spec)
+    with _registry_lock:
+        if _is_ip(spec):
+            for rec in _players.values():
+                if rec.get("ip") == spec:
+                    return dict(rec)
+            return None
+        if norm:
+            for rec in _players.values():
+                if rec.get("mac") == norm:
+                    return dict(rec)
+            return None
+        lower = spec.lower()
+        for rec in _players.values():
+            if rec.get("name", "").lower() == lower or rec.get("uuid") == spec:
+                return dict(rec)
+    return None
+
+
 def get_station_uri(index_or_name):
     """Backwards-compat shim. Prefer get_station() which returns the full
     record including the DIDL-Lite metadata required for Sonos cloud
