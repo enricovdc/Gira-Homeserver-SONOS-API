@@ -103,6 +103,19 @@ ENV_SET_URI = (
     "<CurrentURIMetaData>{meta}</CurrentURIMetaData></u:SetAVTransportURI>"
     "</s:Body></s:Envelope>"
 )
+ENV_SET_PLAY_MODE = (
+    '<?xml version="1.0" encoding="utf-8"?>'
+    '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">'
+    '<s:Body><u:SetPlayMode xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
+    "<InstanceID>0</InstanceID><NewPlayMode>{mode}</NewPlayMode>"
+    "</u:SetPlayMode></s:Body></s:Envelope>"
+)
+ENV_GET_TRANSPORT_SETTINGS = (
+    '<?xml version="1.0" encoding="utf-8"?>'
+    '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">'
+    '<s:Body><u:GetTransportSettings xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
+    "<InstanceID>0</InstanceID></u:GetTransportSettings></s:Body></s:Envelope>"
+)
 
 # BecomeCoordinatorOfStandaloneGroup — ungroups the player from whatever
 # zone group it's currently in, making it a standalone coordinator.
@@ -200,6 +213,55 @@ def _friendly_title(raw):
     if s.startswith("ZPSTR_") or s in _STATE_FRIENDLY:
         return _normalize_state(s)
     return s
+
+
+# Sonos PlayMode alphabet. We expose only shuffle (bool) + repeat-all
+# (bool) on the input side because that's the user-facing pair; on the
+# output side we surface ShuffleState / RepeatState the same way. The
+# six raw modes Sonos accepts are these — decompose and recompose
+# routines below map (shuffle, repeat) <-> raw mode.
+_PLAY_MODE_TO_FLAGS = {
+    "NORMAL":              (False, False),
+    "REPEAT_ALL":          (False, True),
+    "REPEAT_ONE":          (False, True),   # surfaced as RepeatState=1
+    "SHUFFLE_NOREPEAT":    (True,  False),
+    "SHUFFLE":             (True,  True),   # Sonos: shuffle + repeat-all
+    "SHUFFLE_REPEAT_ONE":  (True,  True),
+}
+
+
+def play_mode_to_flags(mode):
+    if not mode:
+        return (False, False)
+    return _PLAY_MODE_TO_FLAGS.get(str(mode).strip().upper(), (False, False))
+
+
+def flags_to_play_mode(shuffle, repeat):
+    """Compose a Sonos PlayMode from the two boolean flags we expose."""
+    if shuffle and repeat:
+        return "SHUFFLE"
+    if shuffle:
+        return "SHUFFLE_NOREPEAT"
+    if repeat:
+        return "REPEAT_ALL"
+    return "NORMAL"
+
+
+def extract_group_master_uuid(track_uri):
+    """When a player is a *member* of a Sonos zone group its current
+    transport URI is "x-rincon:RINCON_<master-uuid>". Returns the
+    master's UUID, or '' for coordinator / standalone players."""
+    if not track_uri:
+        return ""
+    if track_uri.startswith("x-rincon:"):
+        rest = track_uri[len("x-rincon:"):]
+        # Strip query / fragment in case Sonos appends one.
+        for sep in ("?", "#"):
+            i = rest.find(sep)
+            if i >= 0:
+                rest = rest[:i]
+        return rest
+    return ""
 
 
 def _xml_escape(s):
@@ -343,6 +405,9 @@ def parse_notify(body):
     t = re.search(r'<TransportState\s+val="([^"]+)"', inner)
     if t:
         out["state"] = t.group(1)
+    pm = re.search(r'<CurrentPlayMode\s+val="([^"]+)"', inner)
+    if pm:
+        out["playMode"] = pm.group(1)
     v = re.search(r'<Volume\s+channel="Master"\s+val="(\d+)"', inner)
     if v:
         out["volume"] = int(v.group(1))
@@ -361,6 +426,13 @@ def parse_notify(body):
         a = re.search(r"<dc:creator>([^<]*)</dc:creator>", meta)
         if a:
             out["artist"] = unescape_xml(a.group(1))
+        al = re.search(r"<upnp:album>([^<]*)</upnp:album>", meta)
+        if al:
+            out["album"] = unescape_xml(al.group(1))
+        aa = re.search(r"<upnp:albumArtURI>([^<]*)</upnp:albumArtURI>", meta) \
+             or re.search(r"<r:albumArtURI>([^<]*)</r:albumArtURI>", meta)
+        if aa:
+            out["albumArtURI"] = unescape_xml(aa.group(1))
         sc = re.search(r"<r:streamContent>([^<]*)</r:streamContent>", meta)
         if sc:
             out["streamContent"] = unescape_xml(sc.group(1))
@@ -544,7 +616,12 @@ class LogicModule:
         self._last_mute = None
         self._last_title = ""
         self._last_artist = ""
+        self._last_album = ""
+        self._last_album_art = ""
         self._last_zone_name = ""
+        self._last_shuffle = False
+        self._last_repeat = False
+        self._last_group_master = ""  # raw RINCON_xxx master UUID; "" when coordinator
         self._uuid = ""           # Sonos RINCON UUID — needed to build queue URI
         self._active_station = 0
         self._online = False
@@ -639,6 +716,21 @@ class LogicModule:
         if inputs["MuteToggle"].changed and inputs["MuteToggle"].value != 0:
             self._run_control_threaded(self._action_toggle_mute)
 
+        # Shuffle / Repeat-All — two booleans the user sets independently
+        # but Sonos exposes only as a combined PlayMode enum. We compose
+        # the new mode from the latest desired (shuffle, repeat) pair,
+        # taking the current internal state for the input that didn't
+        # change this cycle so toggling one doesn't accidentally reset
+        # the other.
+        if inputs["SetShuffle"].changed or inputs["SetRepeat"].changed:
+            new_shuffle = (bool(inputs["SetShuffle"].value)
+                           if inputs["SetShuffle"].changed else self._last_shuffle)
+            new_repeat = (bool(inputs["SetRepeat"].value)
+                          if inputs["SetRepeat"].changed else self._last_repeat)
+            self._run_control_threaded(
+                lambda s=new_shuffle, r=new_repeat: self._action_set_play_mode(s, r)
+            )
+
         # Start a radio station from the admin's central library OR from
         # the per-player StationNUri inputs. Two routes:
         #   - StartRadio     (number) selects by alphabetical index 1..N
@@ -695,6 +787,8 @@ class LogicModule:
         self._online = True
         if "state" in parsed:
             self._last_state = _normalize_state(parsed["state"])
+        if "playMode" in parsed:
+            self._last_shuffle, self._last_repeat = play_mode_to_flags(parsed["playMode"])
         if "volume" in parsed:
             self._last_volume = parsed["volume"]
         if "mute" in parsed:
@@ -705,6 +799,12 @@ class LogicModule:
             self._last_title = _friendly_title(parsed["streamContent"])
         if "artist" in parsed and parsed["artist"]:
             self._last_artist = parsed["artist"]
+        if "album" in parsed:
+            self._last_album = parsed["album"]
+        if "albumArtURI" in parsed:
+            self._last_album_art = self._absolute_album_art(parsed["albumArtURI"])
+        if "trackUri" in parsed:
+            self._last_group_master = extract_group_master_uuid(parsed["trackUri"])
         self._publish_outputs()
 
     # ----- Config / input reading ------------------------------------------
@@ -848,6 +948,25 @@ class LogicModule:
             return
         current = extract_response_field(body, "CurrentMute") == "1"
         self._action_set_mute(not current)
+
+    def _action_set_play_mode(self, shuffle, repeat):
+        mode = flags_to_play_mode(bool(shuffle), bool(repeat))
+        envelope = ENV_SET_PLAY_MODE.format(mode=mode)
+        ok, _body, err = self._soap("AVTransport", "SetPlayMode", envelope)
+        if ok:
+            self.fw.run_in_context(self._mark_play_mode, (bool(shuffle), bool(repeat)))
+        else:
+            self.fw.run_in_context(self._write_error, (err or "SET_PLAY_MODE_FAILED",))
+
+    def _get_play_mode_blocking(self):
+        """Read CurrentPlayMode from GetTransportSettings. Returns the
+        raw mode string ("NORMAL" / "REPEAT_ALL" / …) or None on failure."""
+        ok, body, _err = self._soap(
+            "AVTransport", "GetTransportSettings", ENV_GET_TRANSPORT_SETTINGS
+        )
+        if not ok:
+            return None
+        return extract_response_field(body, "PlayMode")
 
     def _play_via_queue(self, uri, metadata, spec):
         """Queue-and-play path for container URIs (playlist / album /
@@ -1095,9 +1214,11 @@ class LogicModule:
             vol = self._get_volume_blocking()
             mute_ok, mute_body, _err = self._soap("RenderingControl", "GetMute", ENV_GET_MUTE)
             mute = (extract_response_field(mute_body, "CurrentMute") == "1") if mute_ok else None
+            play_mode = self._get_play_mode_blocking()
             pos_ok, pos_body, _err = self._soap("AVTransport", "GetPositionInfo", ENV_GET_POSITION)
-            title = artist = ""
+            title = artist = album = album_art = track_uri = ""
             if pos_ok:
+                track_uri = extract_response_field(pos_body, "TrackURI") or ""
                 meta_raw = extract_response_field(pos_body, "TrackMetaData") or ""
                 meta = unescape_xml(meta_raw)
                 t = re.search(r"<dc:title>([^<]*)</dc:title>", meta)
@@ -1106,17 +1227,24 @@ class LogicModule:
                 a = re.search(r"<dc:creator>([^<]*)</dc:creator>", meta)
                 if a:
                     artist = unescape_xml(a.group(1))
+                al = re.search(r"<upnp:album>([^<]*)</upnp:album>", meta)
+                if al:
+                    album = unescape_xml(al.group(1))
+                aa = (re.search(r"<upnp:albumArtURI>([^<]*)</upnp:albumArtURI>", meta)
+                      or re.search(r"<r:albumArtURI>([^<]*)</r:albumArtURI>", meta))
+                if aa:
+                    album_art = unescape_xml(aa.group(1))
                 sc = re.search(r"<r:streamContent>([^<]*)</r:streamContent>", meta)
                 if sc:
                     title = unescape_xml(sc.group(1)) or title
             self.fw.run_in_context(
                 self._apply_status_poll,
-                (True, state, vol, mute, title, artist),
+                (True, state, vol, mute, title, artist, album, album_art, play_mode, track_uri),
             )
         else:
             self.fw.run_in_context(
                 self._apply_status_poll,
-                (False, None, None, None, "", ""),
+                (False, None, None, None, "", "", "", "", None, ""),
             )
 
         self._maintain_subscriptions()
@@ -1188,17 +1316,57 @@ class LogicModule:
 
     # ----- Output marshalling (runs in node context) -----------------------
 
+    def _absolute_album_art(self, uri):
+        """Sonos returns album-art URIs as relative paths (/getaa?...).
+        Prepend http://<host>:1400 so the integrator can drop the URI
+        straight into a Gira visualisation tile."""
+        if not uri:
+            return ""
+        if uri.startswith("http://") or uri.startswith("https://"):
+            return uri
+        if uri.startswith("/") and self._host:
+            return "http://{}:1400{}".format(self._host, uri)
+        return uri
+
+    def _group_info_string(self):
+        """Human-friendly group info string.
+        - Coordinator / standalone: empty (use IsCoordinator=1 as signal)
+        - Slave: master's ZoneName when admin knows it, else the raw UUID.
+        """
+        if not self._last_group_master:
+            return ""
+        rec = _admin_player_record(self._last_group_master)
+        if rec and rec.get("zoneName"):
+            return rec["zoneName"]
+        return self._last_group_master
+
     def _publish_outputs(self):
         self.fw.set_output("Online", 1 if self._online else 0)
         self.fw.set_output("State", to_iso_bytes(self._last_state))
+        # Discrete state booleans — exactly one is 1 at any time when
+        # we have a known state (all 0 when state hasn't been read yet).
+        self._publish_state_flags()
         if self._last_volume >= 0:
             self.fw.set_output("Volume", float(self._last_volume))
         if self._last_mute is not None:
             self.fw.set_output("Mute", 1 if self._last_mute else 0)
         self.fw.set_output("Title", to_iso_bytes(self._last_title))
         self.fw.set_output("Artist", to_iso_bytes(self._last_artist))
+        self.fw.set_output("Album", to_iso_bytes(self._last_album))
+        self.fw.set_output("AlbumArtURI", to_iso_bytes(self._last_album_art))
+        self.fw.set_output("ShuffleState", 1 if self._last_shuffle else 0)
+        self.fw.set_output("RepeatState", 1 if self._last_repeat else 0)
+        self.fw.set_output("GroupInfo", to_iso_bytes(self._group_info_string()))
+        self.fw.set_output("IsCoordinator", 0 if self._last_group_master else 1)
         self.fw.set_output("ActiveStation", float(self._active_station))
         self.fw.set_output("ZoneName", to_iso_bytes(self._last_zone_name))
+
+    def _publish_state_flags(self):
+        s = self._last_state
+        self.fw.set_output("IsPlaying", 1 if s == "Playing" else 0)
+        self.fw.set_output("IsPaused", 1 if s == "Paused" else 0)
+        self.fw.set_output("IsStopped", 1 if s == "Stopped" else 0)
+        self.fw.set_output("IsTransitioning", 1 if s == "Transitioning" else 0)
 
     def _publish_zone_name(self):
         self.fw.set_output("ZoneName", to_iso_bytes(self._last_zone_name))
@@ -1212,7 +1380,8 @@ class LogicModule:
             self.debug.set("Subscription av exp", float(max(0, self._sub_av_exp - now)))
             self.debug.set("Subscription rc exp", float(max(0, self._sub_rc_exp - now)))
 
-    def _apply_status_poll(self, online, state, volume, mute, title, artist):
+    def _apply_status_poll(self, online, state, volume, mute, title, artist,
+                           album="", album_art="", play_mode=None, track_uri=""):
         if self.debug is not None:
             self.debug.inc("Status polls")
             self.debug.timestamp("Last poll")
@@ -1227,12 +1396,29 @@ class LogicModule:
             self._last_title = _friendly_title(title)
         if artist:
             self._last_artist = artist
+        # Album / art may legitimately be empty (radio streams have no
+        # album) so we always overwrite — no `if` guard.
+        self._last_album = album
+        self._last_album_art = self._absolute_album_art(album_art)
+        if play_mode:
+            self._last_shuffle, self._last_repeat = play_mode_to_flags(play_mode)
+        if track_uri or online:
+            # Refresh group membership only when we actually had a poll;
+            # offline players keep their last known state.
+            self._last_group_master = extract_group_master_uuid(track_uri)
         self._publish_outputs()
         self._publish_sub_state()
 
     def _mark_state(self, state):
         self._last_state = _normalize_state(state)
         self.fw.set_output("State", to_iso_bytes(self._last_state))
+        self._publish_state_flags()
+
+    def _mark_play_mode(self, shuffle, repeat):
+        self._last_shuffle = bool(shuffle)
+        self._last_repeat = bool(repeat)
+        self.fw.set_output("ShuffleState", 1 if self._last_shuffle else 0)
+        self.fw.set_output("RepeatState", 1 if self._last_repeat else 0)
 
     def _mark_volume(self, level):
         self._last_volume = level

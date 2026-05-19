@@ -153,6 +153,8 @@ def make_player_inputs(host="10.0.0.1", **overrides):
         "VolDown":      StubSlot(0),
         "SetMute":      StubSlot(0),
         "MuteToggle":   StubSlot(0),
+        "SetShuffle":   StubSlot(0),
+        "SetRepeat":    StubSlot(0),
         "StartRadio":   StubSlot(0),
         "StartRadioName": StubSlot(""),
         "GroupPreset":  StubSlot(0),
@@ -234,6 +236,50 @@ class TestSonosPlayerHelpers(unittest.TestCase):
         self.assertEqual(self.mod.to_str(b"Foo"), "Foo")
         self.assertEqual(self.mod.to_str(None), "")
 
+    def test_play_mode_to_flags(self):
+        f = self.mod.play_mode_to_flags
+        self.assertEqual(f("NORMAL"),             (False, False))
+        self.assertEqual(f("REPEAT_ALL"),         (False, True))
+        self.assertEqual(f("REPEAT_ONE"),         (False, True))
+        self.assertEqual(f("SHUFFLE_NOREPEAT"),   (True,  False))
+        self.assertEqual(f("SHUFFLE"),            (True,  True))
+        self.assertEqual(f("SHUFFLE_REPEAT_ONE"), (True,  True))
+        self.assertEqual(f(""),                   (False, False))
+        self.assertEqual(f(None),                 (False, False))
+        # Case-insensitive
+        self.assertEqual(f("shuffle"),            (True,  True))
+
+    def test_flags_to_play_mode(self):
+        f = self.mod.flags_to_play_mode
+        self.assertEqual(f(False, False), "NORMAL")
+        self.assertEqual(f(False, True),  "REPEAT_ALL")
+        self.assertEqual(f(True,  False), "SHUFFLE_NOREPEAT")
+        self.assertEqual(f(True,  True),  "SHUFFLE")
+
+    def test_extract_group_master_uuid(self):
+        g = self.mod.extract_group_master_uuid
+        self.assertEqual(g("x-rincon:RINCON_AABBCC"), "RINCON_AABBCC")
+        # Slave URIs with query/fragment must still extract clean UUID
+        self.assertEqual(g("x-rincon:RINCON_AA?x=1"), "RINCON_AA")
+        self.assertEqual(g("x-rincon:RINCON_AA#0"),   "RINCON_AA")
+        # Non-slave URIs return empty
+        self.assertEqual(g("x-sonosapi-stream:s12345"), "")
+        self.assertEqual(g("x-rincon-mp3radio://x"),    "")
+        self.assertEqual(g(""),                          "")
+        self.assertEqual(g(None),                        "")
+
+    def test_parse_notify_extracts_play_mode_album_albumart(self):
+        sample = """<e:propertyset><e:property><LastChange>&lt;Event&gt;&lt;InstanceID val=&quot;0&quot;&gt;
+&lt;CurrentPlayMode val=&quot;SHUFFLE&quot;/&gt;
+&lt;CurrentTrackURI val=&quot;x-rincon:RINCON_MASTER&quot;/&gt;
+&lt;CurrentTrackMetaData val=&quot;&amp;lt;DIDL-Lite&amp;gt;&amp;lt;item&amp;gt;&amp;lt;dc:title&amp;gt;Yesterday&amp;lt;/dc:title&amp;gt;&amp;lt;dc:creator&amp;gt;Beatles&amp;lt;/dc:creator&amp;gt;&amp;lt;upnp:album&amp;gt;Help!&amp;lt;/upnp:album&amp;gt;&amp;lt;upnp:albumArtURI&amp;gt;/getaa?u=abc&amp;lt;/upnp:albumArtURI&amp;gt;&amp;lt;/item&amp;gt;&amp;lt;/DIDL-Lite&amp;gt;&quot;/&gt;
+&lt;/InstanceID&gt;&lt;/Event&gt;</LastChange></e:property></e:propertyset>"""
+        r = self.mod.parse_notify(sample)
+        self.assertEqual(r["playMode"],    "SHUFFLE")
+        self.assertEqual(r["album"],       "Help!")
+        self.assertEqual(r["albumArtURI"], "/getaa?u=abc")
+        self.assertEqual(r["trackUri"],    "x-rincon:RINCON_MASTER")
+
 
 class TestSonosPlayerLogicModule(unittest.TestCase):
     """LogicModule lifecycle and IO contract tests with a stub framework."""
@@ -296,6 +342,105 @@ class TestSonosPlayerLogicModule(unittest.TestCase):
         lm._mark_volume(33)
         self.assertEqual(fw.outputs["Volume"], 33.0)
         self.assertIsInstance(fw.outputs["Volume"], float)
+
+    def test_state_booleans_exclusive(self):
+        """IsPlaying / IsPaused / IsStopped / IsTransitioning are
+        mutually exclusive — at most one is 1 at any time."""
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._mark_state("PLAYING")
+        self.assertEqual(fw.outputs["IsPlaying"], 1)
+        self.assertEqual(fw.outputs["IsPaused"], 0)
+        self.assertEqual(fw.outputs["IsStopped"], 0)
+        self.assertEqual(fw.outputs["IsTransitioning"], 0)
+        lm._mark_state("PAUSED_PLAYBACK")
+        self.assertEqual(fw.outputs["IsPlaying"], 0)
+        self.assertEqual(fw.outputs["IsPaused"], 1)
+        self.assertEqual(fw.outputs["IsStopped"], 0)
+        lm._mark_state("STOPPED")
+        self.assertEqual(fw.outputs["IsPaused"], 0)
+        self.assertEqual(fw.outputs["IsStopped"], 1)
+        lm._mark_state("TRANSITIONING")
+        self.assertEqual(fw.outputs["IsStopped"], 0)
+        self.assertEqual(fw.outputs["IsTransitioning"], 1)
+
+    def test_mark_play_mode_writes_shuffle_repeat(self):
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm._mark_play_mode(True, False)
+        self.assertEqual(fw.outputs["ShuffleState"], 1)
+        self.assertEqual(fw.outputs["RepeatState"], 0)
+        lm._mark_play_mode(False, True)
+        self.assertEqual(fw.outputs["ShuffleState"], 0)
+        self.assertEqual(fw.outputs["RepeatState"], 1)
+
+    def test_set_play_mode_sends_correct_envelope(self):
+        """The (shuffle, repeat) pair must compose into a Sonos PlayMode
+        value, then go out as a SetPlayMode SOAP call."""
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._host = "10.0.0.1"
+        calls = []
+        lm._soap = lambda s, a, e: (calls.append((a, e)) or (True, "", ""))
+        lm._action_set_play_mode(True, True)
+        self.assertEqual(calls[-1][0], "SetPlayMode")
+        self.assertIn("<NewPlayMode>SHUFFLE</NewPlayMode>", calls[-1][1])
+        lm._action_set_play_mode(False, True)
+        self.assertIn("<NewPlayMode>REPEAT_ALL</NewPlayMode>", calls[-1][1])
+        lm._action_set_play_mode(False, False)
+        self.assertIn("<NewPlayMode>NORMAL</NewPlayMode>", calls[-1][1])
+
+    def test_apply_notify_publishes_album_and_group_info(self):
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._host = "10.0.0.5"
+        lm._apply_notify_parsed({
+            "state":       "PLAYING",
+            "playMode":    "SHUFFLE",
+            "album":       "Abbey Road",
+            "albumArtURI": "/getaa?u=xyz",
+            "trackUri":    "x-rincon:RINCON_MASTER",
+            "title":       "Come Together",
+            "artist":      "Beatles",
+        })
+        self.assertEqual(fw.outputs["Album"], b"Abbey Road")
+        # Album art made absolute against this player's IP
+        self.assertEqual(fw.outputs["AlbumArtURI"], b"http://10.0.0.5:1400/getaa?u=xyz")
+        # Slave because trackUri is x-rincon:
+        self.assertEqual(fw.outputs["IsCoordinator"], 0)
+        self.assertEqual(fw.outputs["GroupInfo"], b"RINCON_MASTER")
+        # PlayMode SHUFFLE -> shuffle + repeat-all
+        self.assertEqual(fw.outputs["ShuffleState"], 1)
+        self.assertEqual(fw.outputs["RepeatState"], 1)
+        # Discrete state booleans
+        self.assertEqual(fw.outputs["IsPlaying"], 1)
+
+    def test_apply_notify_coordinator_when_track_uri_not_xrincon(self):
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._host = "10.0.0.5"
+        lm._apply_notify_parsed({
+            "state": "PLAYING",
+            "trackUri": "x-sonosapi-stream:s24939",
+            "title": "Foo",
+        })
+        self.assertEqual(fw.outputs["IsCoordinator"], 1)
+        self.assertEqual(fw.outputs["GroupInfo"], b"")
+
+    def test_absolute_album_art_keeps_http_urls(self):
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm._host = "10.0.0.5"
+        self.assertEqual(lm._absolute_album_art("/getaa?u=a"),
+                         "http://10.0.0.5:1400/getaa?u=a")
+        # External URL stays intact
+        self.assertEqual(lm._absolute_album_art("https://i.scdn.co/foo.jpg"),
+                         "https://i.scdn.co/foo.jpg")
+        self.assertEqual(lm._absolute_album_art(""), "")
 
 
 # ---------------------------------------------------------------------------
