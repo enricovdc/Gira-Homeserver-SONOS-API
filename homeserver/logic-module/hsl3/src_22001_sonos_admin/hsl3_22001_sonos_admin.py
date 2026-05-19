@@ -401,45 +401,95 @@ def _extract_tag(xml, tag):
 
 
 def _parse_didl_items(didl_xml):
-    """Pull out every <item> block from a DIDL-Lite envelope. For each item
-    we capture title, upnp:class, the playback URI (<res>) and the music-
-    service metadata (<r:resMD>) verbatim. resMD is itself an escaped
-    DIDL-Lite string that the player must receive UNCHANGED."""
+    """Pull out every <item> AND <container> block from a DIDL-Lite envelope.
+
+    Sonos favorites are wrapped in the generic class
+    ``object.itemobject.item.sonos-favorite`` — to know what the
+    favorite actually IS (radio / playlist / album / track) we have to
+    peek at the inner ``<upnp:class>`` carried inside ``<r:resMD>``.
+    For each item we capture title, both class strings, the playback
+    URI, and the music-service metadata verbatim. resMD must reach the
+    player UNCHANGED — it carries the cdudn music-service binding.
+
+    Sonos Playlists (``SQ:`` browse) appear as ``<container>`` blocks
+    instead of ``<item>``; we extract them with the same structure
+    minus resMD (built synthetically so the player can still queue
+    the playlist URI)."""
     items = []
+    # Items first (favorites, tracks, radio).
     for m in re.finditer(r"<item\b[^>]*>([\s\S]*?)</item>", didl_xml):
         inner = m.group(1)
         title = _unescape_xml(_extract_tag(inner, "dc:title"))
-        upnp_class = _extract_tag(inner, "upnp:class")
-        # <res> can have attributes (protocolInfo, duration, …) — strip them.
+        outer_class = _extract_tag(inner, "upnp:class")
         res = _unescape_xml(_extract_tag(inner, "res"))
-        # <r:resMD> is the canonical metadata for a Sonos favorite — the
-        # exact value to pass to SetAVTransportURI's CurrentURIMetaData
-        # so the player knows which music service binding to use.
         res_md_raw = _extract_tag(inner, "r:resMD")
         res_md = _unescape_xml(res_md_raw) if res_md_raw else ""
+        # Peek inside resMD for the wrapped class. A Sonos favorite has
+        # outer class "...sonos-favorite" and the real type lives in the
+        # inner DIDL-Lite, e.g. "object.container.playlistContainer" for
+        # a Spotify playlist favorite.
+        inner_class = ""
+        if res_md:
+            mi = re.search(r"<upnp:class>([^<]+)</upnp:class>", res_md)
+            if mi:
+                inner_class = mi.group(1)
+        effective_class = inner_class or outer_class
         if not (title and res):
             continue
         items.append({
             "title": title,
-            "class": upnp_class,
+            "class": effective_class,
             "uri": res,
             "metadata": res_md,
-            "type": _classify(upnp_class, res),
+            "type": _classify(effective_class, res),
+        })
+    # Containers (Sonos Playlists from SQ: browse).
+    for m in re.finditer(r"<container\b[^>]*id=\"([^\"]+)\"[^>]*>([\s\S]*?)</container>", didl_xml):
+        cid, inner = m.group(1), m.group(2)
+        title = _unescape_xml(_extract_tag(inner, "dc:title"))
+        upnp_class = _extract_tag(inner, "upnp:class") or "object.container.playlistContainer"
+        # SQ: containers carry a queue URI of the form `file:///jffs/settings/savedqueues.rsq#NN`
+        # accessible via x-rincon-queue:RINCON_UUID#0 — easier to use SetAVTransportURI directly
+        # with the container ID via x-rincon-cpcontainer:.
+        # For most SQ:NN entries Sonos accepts SetAVTransportURI with the SQ:NN URI directly.
+        uri = "file:///jffs/settings/savedqueues.rsq#" + cid.split(":")[-1] if cid.startswith("SQ:") else cid
+        if not title:
+            continue
+        items.append({
+            "title": title,
+            "class": upnp_class,
+            "uri": uri,
+            "metadata": "",
+            "type": "playlist",
         })
     return items
 
 
 def _classify(upnp_class, uri):
-    """Friendly category label so the UI can group items."""
+    """Friendly category label so the UI can group items. Looks at the
+    UPnP class first (most reliable when the SDK-style inner class is
+    present) and falls back to URI-scheme heuristics for items where the
+    class is just the generic sonos-favorite wrapper."""
     c = (upnp_class or "").lower()
     if "audiobroadcast" in c:
         return "radio"
-    if "playlistcontainer" in c or "album.musicalbum" in c:
+    if "playlistcontainer" in c:
         return "playlist"
+    if "album.musicalbum" in c or "musicalbum" in c:
+        return "album"
     if "musictrack" in c:
         return "track"
+    # URI-scheme fallbacks for sonos-favorite wrappers with no inner class.
     if uri.startswith("x-rincon-mp3radio") or uri.startswith("x-sonosapi-stream"):
         return "radio"
+    if uri.startswith("x-rincon-cpcontainer"):
+        # Spotify / Apple Music / Amazon playlists or albums.
+        return "playlist"
+    if uri.startswith("x-sonos-spotify") or uri.startswith("x-sonos-http") \
+            or uri.startswith("x-file-cifs"):
+        return "track"
+    if uri.startswith("file:///jffs"):
+        return "playlist"  # Sonos saved queue
     return "other"
 
 
@@ -647,9 +697,20 @@ code { background: #f5f5f5; padding: 1px 6px; border: 1px solid #e8e8e8;
 
   <section>
     <h2>Radio stations</h2>
+    <p class="muted">
+      Wire one of the Sonos Player block's two station-trigger inputs:
+      write the <strong>#</strong> shown below into <code>StartRadio</code>
+      (numeric), or write the <strong>Name</strong> into
+      <code>StartRadioName</code> (string, case-insensitive).
+      Adding or removing stations re-numbers the index list alphabetically.
+    </p>
     <table id="stations">
       <thead><tr>
-        <th style="width:25%">Name</th><th>Stream URI</th><th style="width:12%">Actions</th>
+        <th style="width:6%">#</th>
+        <th style="width:24%">Name</th>
+        <th>Stream URI</th>
+        <th style="width:8%">Meta</th>
+        <th style="width:10%">Actions</th>
       </tr></thead><tbody></tbody>
     </table>
     <div class="row">
@@ -768,13 +829,27 @@ async function refreshStations() {
   const r = await api('GET', '/api/stations');
   const tbody = document.querySelector('#stations tbody');
   tbody.innerHTML = '';
-  for (const s of r.stations) {
+  // The Admin sorts stations alphabetically by name (case-insensitive)
+  // before exposing them to LBS 22000's get_station(idx). Renders the
+  // same order here so the # column matches what the Player block sees.
+  const sorted = [...r.stations].sort(
+    (a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase())
+  );
+  sorted.forEach((s, i) => {
     const tr = document.createElement('tr');
+    const hasMeta = !!(s.metadata && s.metadata.length > 0);
     tr.innerHTML =
+      '<td><strong>' + (i + 1) + '</strong></td>' +
       '<td><input data-sedit="' + esc(s.id) + '" data-field="name" value="' + esc(s.name) + '"></td>' +
       '<td><input data-sedit="' + esc(s.id) + '" data-field="uri"  value="' + esc(s.uri)  + '"></td>' +
+      '<td>' + (hasMeta ? '<span class="pill ssdp" title="Has music-service metadata">yes</span>' : '<span class="muted">—</span>') + '</td>' +
       '<td><button class="danger small" data-del-station="' + esc(s.id) + '">x</button></td>';
     tbody.appendChild(tr);
+  });
+  if (!sorted.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#808080;padding:12px">' +
+      'No stations yet. Add one above, or click <strong>Favorites</strong> on a player to import.' +
+      '</td></tr>';
   }
 }
 async function refreshCloud() {
@@ -857,28 +932,54 @@ async function toggleFavorites(pid, btn) {
     return;
   }
   btn.textContent = 'Loading...';
-  let r;
-  try { r = await api('GET', '/api/players/' + encodeURIComponent(pid) + '/favorites'); }
-  catch (e) { btn.textContent = 'Favorites'; toast(e.message, true); return; }
-  btn.textContent = 'Hide favorites';
+  // Fetch Sonos Favorites (FV:2) AND Sonos Playlists (SQ:) in parallel.
+  // Favorites carries cloud-bound items the user explicitly saved;
+  // Playlists carries the Sonos queues a user saved (which include
+  // Spotify / Apple Music playlists that aren't favorited but are
+  // queued).
+  let favs, pls;
+  try {
+    [favs, pls] = await Promise.all([
+      api('GET', '/api/players/' + encodeURIComponent(pid) + '/favorites'),
+      api('GET', '/api/players/' + encodeURIComponent(pid) + '/playlists').catch(() => ({playlists: []})),
+    ]);
+  } catch (e) { btn.textContent = 'Favorites'; toast(e.message, true); return; }
+  btn.textContent = 'Hide';
   container.dataset.open = '1';
-  if (!r.favorites.length) {
-    container.innerHTML = '<div class="favs-empty">No favorites on this player. Save some in the Sonos app first.</div>';
+
+  const all = [
+    ...(favs.favorites || []).map(f => ({...f, group: 'Sonos Favorites'})),
+    ...(pls.playlists || []).map(f => ({...f, group: 'Sonos Playlists'})),
+  ];
+
+  if (!all.length) {
+    container.innerHTML = '<div class="favs-empty">' +
+      'Nothing here yet. In the Sonos app: long-press a station, playlist, or ' +
+      'album and choose "Add to Sonos Favourites" to make it appear here.' +
+      '</div>';
     return;
   }
-  let html = '<div class="favs-head">Sonos Favorites on this player ' +
-             '<span class="muted">(' + r.favorites.length + ')</span></div>';
-  for (const f of r.favorites) {
-    // Encode the whole record so the Add click handler can POST it back
-    // unchanged (preserving the music-service metadata verbatim).
-    const payload = btoa(unescape(encodeURIComponent(JSON.stringify({
-      name: f.title, uri: f.uri, metadata: f.metadata
-    }))));
-    html += '<div class="fav-row">' +
-              '<span class="fav-type">' + esc(f.type || '') + '</span>' +
-              '<span class="fav-title">' + esc(f.title) + '</span>' +
-              '<button class="small" data-add-fav-station="' + payload + '">Add to stations</button>' +
-            '</div>';
+
+  // Group rendering: each source becomes its own header + rows.
+  let html = '';
+  const byGroup = {};
+  for (const item of all) (byGroup[item.group] ||= []).push(item);
+  for (const groupName of Object.keys(byGroup)) {
+    const list = byGroup[groupName];
+    html += '<div class="favs-head">' + esc(groupName) +
+            ' <span class="muted">(' + list.length + ')</span></div>';
+    for (const f of list) {
+      // Encode the whole record so the Add click handler can POST it back
+      // unchanged (preserving the music-service metadata verbatim).
+      const payload = btoa(unescape(encodeURIComponent(JSON.stringify({
+        name: f.title, uri: f.uri, metadata: f.metadata
+      }))));
+      html += '<div class="fav-row">' +
+                '<span class="fav-type">' + esc(f.type || 'other') + '</span>' +
+                '<span class="fav-title">' + esc(f.title) + '</span>' +
+                '<button class="small" data-add-fav-station="' + payload + '">Add to stations</button>' +
+              '</div>';
+    }
   }
   container.innerHTML = html;
 }
@@ -1313,6 +1414,12 @@ class LogicModule:
             self.debug.set("Stations", float(ns))
             self.debug.set("Cloud authorized", "yes" if authed else "no")
 
+    def _publish_counters_async(self):
+        """Marshal _publish_counters into node context. Use this from any
+        path that runs on the HTTP server thread (every REST handler) —
+        calling set_output from a worker thread raises Hsl3ContextError."""
+        self.fw.run_in_context(self._publish_counters, ())
+
     def _write_error(self, msg):
         self.fw.set_output("LastError", msg.encode("iso-8859-15", "replace"))
 
@@ -1399,7 +1506,7 @@ class LogicModule:
         }
         with _registry_lock:
             _players[rec["id"]] = rec
-        self._publish_counters()
+        self._publish_counters_async()
         return {"ok": True, "player": rec}
 
     def api_remove_player(self, pid):
@@ -1407,7 +1514,7 @@ class LogicModule:
             removed = _players.pop(pid, None)
         if removed is None:
             raise ValueError("unknown player id")
-        self._publish_counters()
+        self._publish_counters_async()
         return {"ok": True}
 
     def api_update_player(self, pid, body):
@@ -1448,7 +1555,7 @@ class LogicModule:
         rec = {"id": sid, "name": name, "uri": uri, "metadata": metadata}
         with _registry_lock:
             _stations[sid] = rec
-        self._publish_counters()
+        self._publish_counters_async()
         return {"ok": True, "station": rec}
 
     def api_player_favorites(self, pid):
@@ -1495,7 +1602,7 @@ class LogicModule:
             removed = _stations.pop(sid, None)
         if removed is None:
             raise ValueError("unknown station id")
-        self._publish_counters()
+        self._publish_counters_async()
         return {"ok": True}
 
     def api_get_cloud(self):

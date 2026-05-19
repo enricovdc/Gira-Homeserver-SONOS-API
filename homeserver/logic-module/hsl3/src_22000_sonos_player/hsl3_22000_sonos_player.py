@@ -488,10 +488,18 @@ class LogicModule:
         if inputs["MuteToggle"].changed and inputs["MuteToggle"].value != 0:
             self._run_control_threaded(self._action_toggle_mute)
 
+        # Start a radio station from the admin's central library OR from
+        # the per-player StationNUri inputs. Two routes:
+        #   - StartRadio     (number) selects by alphabetical index 1..N
+        #   - StartRadioName (string) selects by name (case-insensitive)
         if inputs["StartRadio"].changed:
             idx = int(inputs["StartRadio"].value or 0)
             if idx > 0:
                 self._run_control_threaded(lambda: self._action_start_radio(idx))
+        if inputs["StartRadioName"].changed:
+            name = to_str(inputs["StartRadioName"].value).strip()
+            if name:
+                self._run_control_threaded(lambda: self._action_start_radio(name))
 
         if inputs["Resubscribe"].changed and inputs["Resubscribe"].value != 0:
             self._sid_av = ""
@@ -678,16 +686,33 @@ class LogicModule:
         current = extract_response_field(body, "CurrentMute") == "1"
         self._action_set_mute(not current)
 
-    def _action_start_radio(self, idx):
-        # Resolution order: Admin's global station library first (carries
-        # the DIDL-Lite metadata needed for Sonos cloud favorites like
-        # TuneIn and Spotify), falling back to the per-player StationNUri
-        # input when no Admin block is present.
-        admin_rec = _lookup_station_via_admin(idx)
-        uri = (admin_rec or {}).get("uri") or self._stations.get(idx, "") or ""
-        metadata = (admin_rec or {}).get("metadata") or ""
+    def _action_start_radio(self, spec):
+        """Start a station identified either by a positive integer
+        (alphabetical index into the Admin station library, or 1..8
+        into the per-player StationNUri inputs as fallback) OR by the
+        station's name string (case-insensitive lookup in the Admin
+        library).
+
+        Resolution order: Admin's global station library first (carries
+        the DIDL-Lite metadata needed for Sonos cloud favorites like
+        TuneIn and Spotify), falling back to the per-player StationNUri
+        input when no Admin block is present and the spec is an int.
+        """
+        admin_rec = _lookup_station_via_admin(spec)
+        if admin_rec:
+            uri = admin_rec.get("uri") or ""
+            metadata = admin_rec.get("metadata") or ""
+            spec_label = spec  # for the error message + active-station marker
+        else:
+            # Fall back to the per-player input slot when spec is an int.
+            uri = ""
+            metadata = ""
+            if isinstance(spec, int) or (isinstance(spec, str) and spec.isdigit()):
+                idx = int(spec)
+                uri = self._stations.get(idx, "") or ""
+            spec_label = spec
         if not uri:
-            self.fw.run_in_context(self._write_error, ("STATION_{}_NOT_CONFIGURED".format(idx),))
+            self.fw.run_in_context(self._write_error, ("STATION_NOT_FOUND: {}".format(spec_label),))
             return
 
         if metadata:
@@ -700,7 +725,7 @@ class LogicModule:
             if ok:
                 play_ok, _b2, play_err = self._soap("AVTransport", "Play", ENV_PLAY)
                 if play_ok:
-                    self.fw.run_in_context(self._mark_active_station, (idx,))
+                    self.fw.run_in_context(self._mark_active_station, (spec,))
                 else:
                     self.fw.run_in_context(self._write_error, (play_err,))
                 return
@@ -716,7 +741,7 @@ class LogicModule:
             if ok:
                 play_ok, _b, play_err = self._soap("AVTransport", "Play", ENV_PLAY)
                 if play_ok:
-                    self.fw.run_in_context(self._mark_active_station, (idx,))
+                    self.fw.run_in_context(self._mark_active_station, (spec,))
                 else:
                     self.fw.run_in_context(self._write_error, (play_err,))
                 return
@@ -886,7 +911,16 @@ class LogicModule:
         self._last_mute = mute
         self.fw.set_output("Mute", 1 if mute else 0)
 
-    def _mark_active_station(self, idx):
+    def _mark_active_station(self, spec):
+        """Update the ActiveStation output. Accepts either an int index
+        (preferred) or a station-name string; in the latter case the
+        output records 0 because the alphabetical index would be
+        meaningful only in conjunction with the Admin library state."""
+        if isinstance(spec, int):
+            idx = spec
+        else:
+            s = str(spec).strip()
+            idx = int(s) if s.isdigit() else 0
         self._active_station = idx
         self.fw.set_output("ActiveStation", float(idx))
 

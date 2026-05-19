@@ -152,6 +152,7 @@ def make_player_inputs(host="10.0.0.1", **overrides):
         "SetMute":      StubSlot(0),
         "MuteToggle":   StubSlot(0),
         "StartRadio":   StubSlot(0),
+        "StartRadioName": StubSlot(""),
         "Resubscribe":  StubSlot(0),
         "VolStep":      StubSlot(2),
         "PollInterval": StubSlot(60),
@@ -442,6 +443,79 @@ class TestSonosAdmin(unittest.TestCase):
         self.assertEqual(items[1]["metadata"], "")
         self.assertEqual(items[1]["uri"], "x-rincon-mp3radio://stream.example.com/r1.mp3")
 
+    def test_parse_didl_items_extracts_spotify_playlist_favorite(self):
+        """Sonos favorites for Spotify playlists are wrapped in the
+        generic sonos-favorite class — the actual playlistContainer
+        class lives inside the resMD. The parser must peek there so
+        the playlist gets classified as 'playlist' (not 'other'),
+        otherwise the Admin UI used to display only radio favorites."""
+        sample = (
+            '<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/" '
+            'xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" '
+            'xmlns:r="urn:schemas-rinconnetworks-com:metadata-1-0/" '
+            'xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">'
+            '<item id="FV:2/9" parentID="FV:2" restricted="true">'
+            '<dc:title>My Spotify Playlist</dc:title>'
+            '<upnp:class>object.itemobject.item.sonos-favorite</upnp:class>'
+            '<res protocolInfo="x-rincon-cpcontainer:*:*:*">'
+            'x-rincon-cpcontainer:1006206cspotify%3aplaylist%3aXYZ?sid=9&amp;flags=8300&amp;sn=1</res>'
+            '<r:resMD>&lt;DIDL-Lite&gt;&lt;item&gt;&lt;upnp:class&gt;'
+            'object.container.playlistContainer&lt;/upnp:class&gt;'
+            '&lt;desc id=&quot;cdudn&quot;&gt;SA_RINCON3079_X_#Svc3079-0&lt;/desc&gt;'
+            '&lt;/item&gt;&lt;/DIDL-Lite&gt;</r:resMD>'
+            '</item></DIDL-Lite>'
+        )
+        items = self.mod._parse_didl_items(sample)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["title"], "My Spotify Playlist")
+        # The inner class must drive the type classification.
+        self.assertEqual(items[0]["type"], "playlist")
+        self.assertIn("SA_RINCON3079", items[0]["metadata"])
+
+    def test_classify_recognises_cpcontainer_uri_as_playlist(self):
+        """Even when the favorite wrapper has no inner class info, a
+        cpcontainer URI scheme must classify as playlist (Spotify /
+        Apple Music / Amazon Music playlists and albums all use this)."""
+        self.assertEqual(self.mod._classify("", "x-rincon-cpcontainer:1006206cspotify"), "playlist")
+        self.assertEqual(self.mod._classify("object.container.playlistContainer", "anything"), "playlist")
+        self.assertEqual(self.mod._classify("", "x-sonosapi-stream:s12345"), "radio")
+        self.assertEqual(self.mod._classify("", "file:///jffs/settings/savedqueues.rsq#3"), "playlist")
+
+    def test_parse_didl_items_extracts_sq_containers(self):
+        """SQ: browse returns <container> blocks for Sonos Playlists
+        (user-saved queues). They're not items so the original parser
+        would skip them entirely. New container path must include them."""
+        sample = (
+            '<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" '
+            'xmlns:dc="http://purl.org/dc/elements/1.1/" '
+            'xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/">'
+            '<container id="SQ:3" parentID="SQ:" restricted="true">'
+            '<dc:title>Saturday Morning</dc:title>'
+            '<upnp:class>object.container.playlistContainer</upnp:class>'
+            '</container></DIDL-Lite>'
+        )
+        items = self.mod._parse_didl_items(sample)
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["title"], "Saturday Morning")
+        self.assertEqual(items[0]["type"], "playlist")
+
+    def test_publish_counters_async_uses_run_in_context(self):
+        """Regression for the 'Method can't be called outside context thread'
+        error: any state-mutating API method must marshal counter
+        re-publishing back to node context via run_in_context."""
+        fw = StubFramework()
+        called = []
+        # Intercept run_in_context to confirm the wrap path is taken.
+        orig = fw.run_in_context
+        def spy(cb, params):
+            called.append(cb.__name__ if hasattr(cb, '__name__') else 'callable')
+            orig(cb, params)
+        fw.run_in_context = spy
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._publish_counters_async()
+        self.assertEqual(called[-1], '_publish_counters')
+
     def test_get_station_returns_metadata(self):
         """LBS 22000 uses get_station() to retrieve the full record."""
         with self.mod._registry_lock:
@@ -631,6 +705,18 @@ class TestPlayerStationFromAdmin(unittest.TestCase):
         rec = self.player._lookup_station_via_admin(1)
         self.assertEqual(rec["uri"], "x-sonosapi-stream:s24939")
         self.assertIn("SA_RINCON65031", rec["metadata"])
+
+    def test_lookup_station_by_name_case_insensitive(self):
+        """StartRadioName lookup goes through _lookup_station_via_admin
+        with a string. Must match case-insensitively."""
+        with self.admin._registry_lock:
+            self.admin._stations["a"] = {
+                "id": "a", "name": "BBC Radio 1", "uri": "http://r1", "metadata": "",
+            }
+        self.assertEqual(self.player._lookup_station_via_admin("BBC Radio 1")["uri"], "http://r1")
+        self.assertEqual(self.player._lookup_station_via_admin("bbc radio 1")["uri"], "http://r1")
+        self.assertEqual(self.player._lookup_station_via_admin("BBC RADIO 1")["uri"], "http://r1")
+        self.assertIsNone(self.player._lookup_station_via_admin("unknown"))
 
     def test_lookup_station_via_admin_returns_none_when_empty(self):
         self.assertIsNone(self.player._lookup_station_via_admin(1))
