@@ -1,25 +1,28 @@
 {
   "module": {
-    "id": "22002",
+    "id": "22001",
     "context": "sonos.bridge",
     "category": "Multimedia\\Sonos",
     "name": "Sonos Admin",
     "version": "1.0.0",
-    "hsl_filename": "22002_sonos_admin.hsl",
+    "hsl_filename": "22001_sonos_admin.hsl",
     "inputs": [
       { "type": "number", "identifier": "HttpPort",             "init_value": 8080, "label": "Admin HTTP Port" },
       { "type": "number", "identifier": "AutoDiscoverInterval", "init_value": 300,  "label": "Auto Discover Interval seconds" },
       { "type": "number", "identifier": "TriggerDiscovery",     "init_value": 0,    "label": "Trigger Discovery Now" },
+      { "type": "number", "identifier": "DiscoveryTimeout",     "init_value": 4,    "label": "Discovery Timeout seconds" },
       { "type": "string", "identifier": "CloudClientId",        "init_value": "",   "label": "Sonos Cloud Client ID optional" },
       { "type": "string", "identifier": "CloudClientSecret",    "init_value": "",   "label": "Sonos Cloud Client Secret optional" },
       { "type": "string", "identifier": "OAuthRedirectBase",    "init_value": "",   "label": "OAuth Redirect Base URL optional" }
     ],
     "outputs": [
-      { "type": "number", "identifier": "ListenPort",       "init_value": 0,  "label": "Admin Listener Port" },
-      { "type": "number", "identifier": "PlayerCount",      "init_value": 0,  "label": "Players in Registry" },
-      { "type": "number", "identifier": "StationCount",     "init_value": 0,  "label": "Stations in Registry" },
-      { "type": "number", "identifier": "CloudAuthorized",  "init_value": 0,  "label": "Cloud OAuth Authorized" },
-      { "type": "string", "identifier": "LastError",        "init_value": "", "label": "Last Error" }
+      { "type": "number", "identifier": "ListenPort",          "init_value": 0,  "label": "Admin Listener Port" },
+      { "type": "number", "identifier": "PlayerCount",         "init_value": 0,  "label": "Players in Registry" },
+      { "type": "number", "identifier": "StationCount",        "init_value": 0,  "label": "Stations in Registry" },
+      { "type": "number", "identifier": "CloudAuthorized",     "init_value": 0,  "label": "Cloud OAuth Authorized" },
+      { "type": "string", "identifier": "DiscoveredPlayers",   "init_value": "", "label": "Last Scan Result ip;uuid;model per line" },
+      { "type": "number", "identifier": "LastDiscoveryCount",  "init_value": 0,  "label": "Last Scan Count" },
+      { "type": "string", "identifier": "LastError",           "init_value": "", "label": "Last Error" }
     ],
     "store": [
       { "type": "number", "identifier": "Reserved", "init_value": 0 }
@@ -28,7 +31,7 @@
       { "identifier": "Tick" }
     ],
     "scripts": [
-      { "filename": "hsl3_22002_sonos_admin.py" }
+      { "filename": "hsl3_22001_sonos_admin.py" }
     ],
     "translations": [
       {
@@ -39,6 +42,7 @@
           { "label": "Admin HTTP Port" },
           { "label": "Auto-Suche Intervall Sekunden" },
           { "label": "Suche jetzt starten" },
+          { "label": "Suche Timeout Sekunden" },
           { "label": "Sonos Cloud Client ID optional" },
           { "label": "Sonos Cloud Client Secret optional" },
           { "label": "OAuth Redirect Basis URL optional" }
@@ -48,6 +52,8 @@
           { "label": "Player im Register" },
           { "label": "Sender im Register" },
           { "label": "Cloud OAuth autorisiert" },
+          { "label": "Letztes Suchergebnis ip;uuid;modell pro Zeile" },
+          { "label": "Letzte Suche Anzahl" },
           { "label": "Letzter Fehler" }
         ]
       }

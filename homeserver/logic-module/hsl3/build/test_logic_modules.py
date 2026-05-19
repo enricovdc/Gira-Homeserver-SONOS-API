@@ -16,8 +16,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[4]
 PLAYER_PY = ROOT / "homeserver" / "logic-module" / "hsl3" / "src_22000_sonos_player" / "hsl3_22000_sonos_player.py"
-DISCOVER_PY = ROOT / "homeserver" / "logic-module" / "hsl3" / "src_22001_sonos_discover" / "hsl3_22001_sonos_discover.py"
-ADMIN_PY = ROOT / "homeserver" / "logic-module" / "hsl3" / "src_22002_sonos_admin" / "hsl3_22002_sonos_admin.py"
+ADMIN_PY = ROOT / "homeserver" / "logic-module" / "hsl3" / "src_22001_sonos_admin" / "hsl3_22001_sonos_admin.py"
 
 
 def load_module(path: Path, mod_name: str):
@@ -295,28 +294,6 @@ class TestSonosPlayerLogicModule(unittest.TestCase):
         self.assertIsInstance(fw.outputs["Volume"], float)
 
 
-class TestSonosDiscover(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        sys.modules.setdefault("requests", _make_requests_stub())
-        cls.mod = load_module(DISCOVER_PY, "sonos_discover_22001")
-
-    def test_handle_result_encodes_bytes(self):
-        fw = StubFramework()
-        lm = self.mod.LogicModule(fw)
-        lm.debug = fw.create_debug_section()
-        players = [("192.168.1.10", "RINCON_AA", "PLAY:5"),
-                   ("192.168.1.11", "RINCON_BB", "Beam")]
-        lm._handle_result(players)
-        self.assertIn(b"192.168.1.10;RINCON_AA;PLAY:5", fw.outputs["Result"])
-        self.assertEqual(fw.outputs["Count"], 2.0)
-
-    def test_looks_like_sonos(self):
-        self.assertTrue(self.mod.looks_like_sonos({"SERVER": "Linux/3.x Sonos/123"}))
-        self.assertTrue(self.mod.looks_like_sonos({"USN": "uuid:RINCON_AABBCC"}))
-        self.assertFalse(self.mod.looks_like_sonos({"SERVER": "Foo/1.0"}))
-
-
 # ---------------------------------------------------------------------------
 # Minimal `requests` stub so module import works in CI even without the
 # requests library installed. Tests never actually issue HTTP.
@@ -338,12 +315,12 @@ def _make_requests_stub():
 
 
 class TestSonosAdmin(unittest.TestCase):
-    """LBS 22002 admin module: registry CRUD, MAC normalization, helpers."""
+    """LBS 22001 admin module: registry CRUD, MAC normalization, helpers."""
 
     @classmethod
     def setUpClass(cls):
         sys.modules.setdefault("requests", _make_requests_stub())
-        cls.mod = load_module(ADMIN_PY, "sonos_admin_22002")
+        cls.mod = load_module(ADMIN_PY, "sonos_admin_22001")
 
     def setUp(self):
         # Fresh registry per test.
@@ -460,6 +437,29 @@ class TestSonosAdmin(unittest.TestCase):
         self.assertNotIn("clientSecret", r["cloud"])
         self.assertTrue(r["cloud"]["clientSecretSet"])
 
+    def test_admin_post_discovery_publishes_discover_outputs(self):
+        """KNX-friendly outputs (formerly LBS 22001 Discover): DiscoveredPlayers
+        as newline-separated ip;uuid;model and LastDiscoveryCount as a number."""
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        discovered = [
+            {"ip": "192.168.1.10", "uuid": "RINCON_AA", "model": "PLAY:5"},
+            {"ip": "192.168.1.11", "uuid": "RINCON_BB", "model": "Beam"},
+        ]
+        lm._post_discovery(discovered)
+        self.assertIn(b"192.168.1.10;RINCON_AA;PLAY:5", fw.outputs["DiscoveredPlayers"])
+        self.assertIn(b"192.168.1.11;RINCON_BB;Beam",  fw.outputs["DiscoveredPlayers"])
+        self.assertEqual(fw.outputs["LastDiscoveryCount"], 2.0)
+
+    def test_admin_post_discovery_empty_scan(self):
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._post_discovery([])
+        self.assertEqual(fw.outputs["DiscoveredPlayers"], b"")
+        self.assertEqual(fw.outputs["LastDiscoveryCount"], 0.0)
+
     def test_admin_oauth_start_requires_full_config(self):
         fw = StubFramework()
         lm = self.mod.LogicModule(fw)
@@ -480,7 +480,7 @@ class TestPlayerHostResolution(unittest.TestCase):
     def setUpClass(cls):
         sys.modules.setdefault("requests", _make_requests_stub())
         # Load admin first so its globals are available to the player module.
-        cls.admin = load_module(ADMIN_PY, "sonos_admin_22002_for_player")
+        cls.admin = load_module(ADMIN_PY, "sonos_admin_22001_for_player")
         cls.player = load_module(PLAYER_PY, "sonos_player_22000_for_admin")
 
     def setUp(self):

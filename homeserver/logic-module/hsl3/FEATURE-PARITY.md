@@ -54,11 +54,12 @@ for — no separate HTTP layer is needed.
 
 | Function | HSL3 location | Notes |
 | --- | --- | --- |
-| SSDP M-SEARCH | LBS 22001 (Sonos Discover) | Trigger input fires a multicast probe |
-| Multi-target SSDP (2024+ firmware safe) | `SEARCH_TARGETS` in `hsl3_22001_sonos_discover.py` | ZonePlayer + SpeakerGroup + ssdp:all, filtered by `SERVER`/`USN` |
-| Result list | LBS 22001 output `Result` | Newline-separated `ip;uuid;model` |
-| Count | LBS 22001 output `Count` | |
-| Error | LBS 22001 output `Error` | |
+| SSDP M-SEARCH | LBS 22001 (Sonos Admin) | `TriggerDiscovery` input fires a multicast probe; periodic scan runs every `AutoDiscoverInterval` seconds. |
+| Multi-target SSDP (2024+ firmware safe) | `SSDP_TARGETS` in `hsl3_22001_sonos_admin.py` | ZonePlayer + SpeakerGroup + ssdp:all, filtered by `SERVER`/`USN` |
+| Result list | LBS 22001 output `DiscoveredPlayers` | Newline-separated `ip;uuid;model` |
+| Count | LBS 22001 output `LastDiscoveryCount` | |
+| Error | LBS 22001 output `LastError` | |
+| Scan timeout | LBS 22001 input `DiscoveryTimeout` | Default 4 s. |
 
 ## UPnP event push (no polling)
 
@@ -94,14 +95,18 @@ for — no separate HTTP layer is needed.
 | Callback base URL | LBS 22000 input `CallbackBase` (E18) | Leave empty for auto-detected `http://<lan-ip>:<listener-port>` |
 | Runtime config edits | Wire any of the inputs above to HS data points that the visualisation can write | Equivalent to the bridge's runtime PUT /api/config |
 
-## Web admin UI (LBS 22002 Sonos Admin)
+## Web admin UI (LBS 22001 Sonos Admin)
 
 The Sonos Admin module brings a runtime web UI back into the HSL3
-integration without re-introducing the legacy external bridge.
+integration without re-introducing the legacy external bridge. It
+also subsumes the formerly-separate LBS 22001 Sonos Discover node —
+the same SSDP discovery runs from inside Admin and publishes
+`DiscoveredPlayers` + `LastDiscoveryCount` outputs for KNX-side
+consumers.
 
 | Function | HSL3 location | Notes |
 | --- | --- | --- |
-| Web UI served on port 8080 | LBS 22002 (Sonos Admin) | `_start_server` binds with fallback to 8081–8083, then ephemeral. |
+| Web UI served on port 8080 | LBS 22001 (Sonos Admin) | `_start_server` binds with fallback to 8081–8083, then ephemeral. |
 | List discovered + manually-added players | `api_list_players` | `GET /api/players` |
 | Manually add a player (by **IP** and/or **MAC**) | `api_add_player` | `POST /api/players`. Either field is sufficient; MAC is preferred for DHCP environments. |
 | Edit a player's name / IP / MAC | `api_update_player` | `PATCH /api/players/{id}` |
@@ -142,4 +147,4 @@ serve the in-HomeServer integration model:
   rather than re-implementing auth inside HSL3.
 
 If any of these becomes useful again, they can be added without
-changing the LBS 22000 / 22001 / 22002 trio.
+changing the LBS 22000 + 22001 pair.

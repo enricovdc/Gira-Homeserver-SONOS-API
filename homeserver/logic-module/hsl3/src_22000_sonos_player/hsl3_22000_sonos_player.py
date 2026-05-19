@@ -233,7 +233,7 @@ def resolve_host_spec(spec):
 
     Accepts an IPv4 literal (used as-is), a MAC address, a player name, or
     a Sonos UUID. The latter three are resolved by asking the Sonos Admin
-    LBS (22002) via its module-level `resolve_host` function — found via
+    LBS (22001) via its module-level `resolve_host` function — found via
     sys.modules to avoid a hard import dependency. If no Admin module is
     loaded, only IP literals work (the old behaviour). Returns '' when
     resolution fails; the caller treats that as offline.
@@ -244,10 +244,11 @@ def resolve_host_spec(spec):
     if _is_ip_literal(spec):
         return spec
     # Try every loaded module whose name looks like the admin module.
+    # LBS 22001 = Sonos Admin (combined Discover + Admin since v1.0).
     for mod_name, mod in list(sys.modules.items()):
         if mod is None:
             continue
-        if "sonos_admin" in mod_name or "hsl3_22002" in mod_name:
+        if "sonos_admin" in mod_name or "hsl3_22001" in mod_name:
             resolver = getattr(mod, "resolve_host", None)
             if callable(resolver):
                 try:

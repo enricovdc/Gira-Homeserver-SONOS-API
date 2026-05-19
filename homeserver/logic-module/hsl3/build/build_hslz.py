@@ -54,15 +54,9 @@ MODULES = [
     },
     {
         "id": "22001",
-        "name": "sonos_discover",
-        "src_dir": HSL3_DIR / "src_22001_sonos_discover",
-        "hsl_name": "22001_sonos_discover.hsl",
-    },
-    {
-        "id": "22002",
         "name": "sonos_admin",
-        "src_dir": HSL3_DIR / "src_22002_sonos_admin",
-        "hsl_name": "22002_sonos_admin.hsl",
+        "src_dir": HSL3_DIR / "src_22001_sonos_admin",
+        "hsl_name": "22001_sonos_admin.hsl",
     },
 ]
 

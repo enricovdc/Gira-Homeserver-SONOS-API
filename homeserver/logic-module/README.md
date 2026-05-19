@@ -1,7 +1,7 @@
 # Gira HomeServer logic module
 
 Native HSL3 logic modules that run inside the HomeServer's own logic
-engine. Two LBS blocks (Sonos Player + Sonos Discover) plus the SOAP
+engine. Two LBS blocks (Sonos Player + Sonos Admin) plus the SOAP
 envelope reference embedded in their Python source.
 
 ## Layout

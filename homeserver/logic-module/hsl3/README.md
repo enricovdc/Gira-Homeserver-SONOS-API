@@ -1,34 +1,37 @@
 # HSL3 logic modules for the Gira HomeServer
 
-Three LBS modules implementing the full Sonos integration as native HSL3
+Two LBS modules implementing the full Sonos integration as native HSL3
 (Python 3.9) logic blocks for the Gira HomeServer / FacilityServer
 firmware 4.13+:
 
 | LBS ID | Name | Role |
 | --- | --- | --- |
 | **22000** | Sonos Player | Per-player control, status, eight radio stations, UPnP event push. One instance per Sonos player. |
-| **22001** | Sonos Discover | SSDP M-SEARCH on the LAN to find Sonos players. Optional companion. |
-| **22002** | Sonos Admin | Singleton companion that starts a web UI at `http://<hs-ip>:8080/`. Manages discovered + manually-added players (by **IP and/or MAC**), a global radio-station library, and Sonos Cloud OAuth credentials. Optional; LBS 22000 still works without it. |
+| **22001** | Sonos Admin | Singleton companion. Web UI at `http://<hs-ip>:8080/` for players (by **IP and/or MAC**), radio-station library, and Sonos Cloud OAuth. Also runs periodic + KNX-triggerable SSDP discovery and exposes the result on `DiscoveredPlayers` / `LastDiscoveryCount` outputs for direct KNX wiring. Optional; LBS 22000 still works without it. |
 
 LBS IDs are in the third-party range (20000–99999). Register them on
 hs-help.net before publishing if you intend to distribute. For internal
 use no registration is needed.
+
+> **Note**: an earlier version shipped LBS 22001 as a separate "Sonos
+> Discover" node and LBS 22002 as "Sonos Admin". They've been merged
+> into the single LBS 22001 Sonos Admin shipped today — Admin's
+> discovery covers everything Discover did, and the integrator only
+> has one companion to wire up.
 
 ## How they relate
 
 - **Standalone**: drop LBS 22000 (Sonos Player) on the canvas, set its
   `Host` to the player's IP, wire KNX. Works as documented in
   `FEATURE-PARITY.md`. No admin module needed.
-- **With Admin**: add LBS 22002 (Sonos Admin). Its web UI lets end
+- **With Admin**: add LBS 22001 (Sonos Admin). Its web UI lets end
   users add/edit players (manually or via SSDP discovery), edit a
   shared station library, and configure Sonos Cloud OAuth. LBS 22000
   then accepts a **player name** or a **MAC address** in its `Host`
   input and resolves it through Admin's registry. DHCP renumbering
-  no longer breaks wiring.
-- **Discover**: a KNX-triggered SSDP scanner whose output is a
-  newline-separated `ip;uuid;model` list. Useful when commissioning
-  without using the Admin web UI. If both Admin and Discover are
-  loaded, Discover's results also feed Admin's registry.
+  no longer breaks wiring. The Admin block also publishes the latest
+  SSDP scan result on its `DiscoveredPlayers` output for KNX-side
+  consumers that don't want to use the web UI.
 
 ## Directory layout
 
@@ -41,11 +44,8 @@ hsl3/
 ├── src_22000_sonos_player/
 │   ├── hsl3_22000_sonos_player.py    LogicModule source
 │   └── config.json                   inputs / outputs / store / timer / scripts
-├── src_22001_sonos_discover/
-│   ├── hsl3_22001_sonos_discover.py
-│   └── config.json
-├── src_22002_sonos_admin/
-│   ├── hsl3_22002_sonos_admin.py     web UI + REST API + OAuth callback
+├── src_22001_sonos_admin/
+│   ├── hsl3_22001_sonos_admin.py     web UI + REST + OAuth + SSDP discovery
 │   └── config.json
 ├── help/
 │   ├── style.css                     SDK stylesheet (from the GiraHSL skill)
@@ -106,7 +106,7 @@ python3 homeserver/logic-module/hsl3/build/build_hslz.py
 ```
 
 Output: `homeserver/logic-module/hsl3/build/dist/22000_sonos_player.hslz`
-and `22001_sonos_discover.hslz`, each containing the deployable `.hsl`
+and `22001_sonos_admin.hslz`, each containing the deployable `.hsl`
 plus EN+DE help plus style.css. Import the `.hslz` in Experte via
 **Logikbausteine → Importieren**.
 
@@ -138,7 +138,10 @@ python3 homeserver/logic-module/hsl3/build/test_logic_modules.py
 - `LogicModule` IO contract (string outputs are bytes, numeric
   outputs are float/int, error path encodes correctly, status-poll
   offline transition).
-- Sonos Discover (header sniffing, result row encoding).
+- Sonos Admin (MAC / IP normalization, registry CRUD, host resolution
+  by IP / MAC / name, station library lookup by name / index, OAuth
+  parameter generation, cloud-secret-never-leaked invariant, KNX
+  discovery outputs `DiscoveredPlayers` + `LastDiscoveryCount`).
 
 The tests use a `StubFramework` that mirrors the real `Hsl3Framework`
 surface (`set_output`, `set_timer`, `set_store`, `get_logger`,
@@ -189,18 +192,22 @@ output changing.
 
 1. Open the project in HS Experte 4.13 or newer.
 2. **Logikbausteine → Importieren** → select
-   `dist/22000_sonos_player.hslz` and `dist/22001_sonos_discover.hslz`.
+   `dist/22000_sonos_player.hslz` and `dist/22001_sonos_admin.hslz`.
 3. The two new blocks appear under **Multimedia → Sonos**.
-4. For each Sonos player:
+4. **(Recommended)** Drag one Sonos Admin block onto the canvas, then
+   open `http://<homeserver-ip>:8080/` in a browser to discover players
+   or add them by IP / MAC.
+5. For each Sonos player:
    - Drag a Sonos Player block onto the logic canvas.
-   - Set the `Host` input to the player's IP (use the Sonos Discover
-     block once at commissioning if you don't know the IPs).
+   - Set the `Host` input to the player's IP, MAC, or name from the
+     Admin web UI (the Admin block resolves names/MACs to the current
+     IP and survives DHCP renumbering).
    - Wire control inputs to KNX group addresses.
    - Wire status outputs to KNX group addresses with the appropriate
      DPTs (see `homeserver/KNX-MAPPING.md` in the parent directory).
-5. Download to the HomeServer.
+6. Download to the HomeServer.
 
-## Web admin UI (LBS 22002)
+## Web admin UI (LBS 22001)
 
 Drop a *Sonos Admin* block onto the canvas (no inputs needed for the
 default config) and download the project. The HSL3 module:
@@ -250,9 +257,24 @@ Open `http://<homeserver-ip>:<ListenPort>/` in a browser:
   plumbing); a future LBS can read the tokens and fall back to the
   Sonos Cloud Control API when local SOAP is unavailable.
 
+## KNX-triggered discovery (formerly LBS 22001 Discover)
+
+The Admin block's `TriggerDiscovery` input (rising edge) launches an
+on-demand SSDP scan. After every scan — periodic or triggered — these
+outputs are updated for KNX consumers:
+
+| Output | Description |
+| --- | --- |
+| `DiscoveredPlayers` | String, newline-separated `ip;uuid;model` rows. Wire to a DPT 16.x output if you want to display it on a panel; or split with a parser in another logic block. |
+| `LastDiscoveryCount` | Number of players seen in the most recent scan. |
+| `PlayerCount` | Total players currently in the registry (SSDP + manual). |
+
+The `DiscoveryTimeout` input (default 4 s) controls how long each scan
+waits for responses.
+
 ## Using a name or MAC as a player Host
 
-When LBS 22002 (Sonos Admin) is present, LBS 22000's `Host` input
+When LBS 22001 (Sonos Admin) is present, LBS 22000's `Host` input
 accepts more than a literal IPv4 address:
 
 | Host value | Behaviour |
@@ -270,7 +292,7 @@ Tick once the registry updates.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `LastError = UNREACHABLE` | Player offline or wrong IP | Check the Sonos app for the player's current IP; run *Sonos Discover* if it changed. |
+| `LastError = UNREACHABLE` | Player offline or wrong IP | Check the Sonos app for the player's current IP; trigger an SSDP scan from the Sonos Admin web UI (or wait for the periodic refresh). |
 | `LastError = HTTP_<code>` | Sonos returned an unexpected HTTP status | Look at the player's debug page in Experte and any SOAP fault code; check that the player isn't a stereo-pair member (control the coordinator instead). |
 | `Subscribed = 0` permanently | NOTIFY listener didn't bind (port 8081 unavailable, firewall) | The module falls back to polling automatically. Check the *Listener port* field on the debug page; if it shows `disabled`, free up the port or accept polling-only operation. |
 | Outputs not updating in KNX | Wiring missing in Experte or KNX bus down | Confirm the LBS output is wired to a KNX group address; check `Online`/`State` change in the Experte debug view. |

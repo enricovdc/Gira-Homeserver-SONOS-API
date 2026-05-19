@@ -2,18 +2,18 @@
 <html>
 <head>
 <link rel="stylesheet" href="../style.css">
-<title>Logic - Sonos Discover</title>
+<title>Logic - Sonos Admin</title>
 <style>body { background: none; }</style>
 <meta http-equiv="Content-Type" content="text/html;charset=utf-8">
 </head>
 <body>
-<div class="top-title">Sonos Discover</div>
+<div class="top-title">Sonos Admin</div>
 <div class="nav">
   <a href="javascript:history.back()">Previous</a> /
   <a href="javascript:history.forward()">Next</a> |
   <a href="hlpsearch.html">Search</a> |
   <a href="index.html">Help</a> /
-  <a href="logic.html">Logic</a> / Sonos Discover
+  <a href="logic.html">Logic</a> / Sonos Admin
 </div>
 
 <div class="index">
@@ -27,57 +27,69 @@
 <div class="content">
 
 <div class="topic">
-  <h2 class="t-line">
-    <a id="auto_index_anchor_1_"></a>
-    <span class="t-chapter">1.</span><span class="t-text">Description</span>
-  </h2>
+  <h2 class="t-line"><a id="auto_index_anchor_1_"></a><span class="t-chapter">1.</span><span class="t-text">Description</span></h2>
   <div class="descr">
-    Performs an SSDP M-SEARCH on the LAN to find every Sonos player reachable from the HomeServer. Emits a newline separated list on the Result output of the form ip;uuid;model, one row per player.
+    Singleton companion node that starts an HTTP server inside HSL3 and serves a web administration UI for the Sonos integration. The UI lets the end user manage discovered and manually-added Sonos players (identified by IP and/or MAC), maintain a global radio station library, and configure Sonos Cloud Control API credentials with OAuth authorization without leaving the HomeServer.
+  </div>
+  <div class="descr">
+    The node runs both periodic and KNX-triggerable SSDP discovery. The latest scan result is emitted as a newline-separated ip;uuid;model list on DiscoveredPlayers and a numeric count on LastDiscoveryCount, suitable for direct KNX wiring or HS visualisation widgets.
+  </div>
+  <div class="descr">
+    The node maintains a class-level player registry that LBS 22000 Sonos Player consults whenever its Host input is a friendly name or a MAC address instead of a literal IP. This makes configured player references survive DHCP renumbering on networks that don't reserve addresses.
   </div>
   <div class="alert-box ibox-hint">
     <div class="box-title">Note</div>
     <div class="box-text"><div class="descr">
-      Use this node once at commissioning time to populate the Host input on each Sonos Player node. SSDP only works on the same broadcast domain as the players; multi-VLAN setups need an IGMP proxy or pre-configured player IPs.
+      LBS 22000 still works standalone when this Admin node is absent. Add the Admin node when you want the web UI, KNX-triggerable discovery, the shared station library, or DHCP-resilient player references.
+    </div></div>
+  </div>
+  <div class="alert-box ibox-warn">
+    <div class="box-title">Important</div>
+    <div class="box-text"><div class="descr">
+      The node binds a TCP listener on port 8080 (or next free up to 8083). The web UI is unauthenticated and should not be exposed beyond the LAN.
     </div></div>
   </div>
 </div>
 
 <div class="topic">
-  <h2 class="t-line">
-    <a id="auto_index_anchor_2_"></a>
-    <span class="t-chapter">2.</span><span class="t-text">Inputs</span>
-  </h2>
+  <h2 class="t-line"><a id="auto_index_anchor_2_"></a><span class="t-chapter">2.</span><span class="t-text">Inputs</span></h2>
   <table class="table-in">
     <tr><td class="io-nr center">E#</td><td class="io-name">Name</td><td class="io-init center">Init</td><td class="io-descr">Description</td></tr>
-    <tr><td class="io-nr input center">E1</td><td class="io-name">Trigger</td><td class="io-init center">0</td><td class="io-descr">Rising edge starts an SSDP discovery cycle.</td></tr>
-    <tr><td class="io-nr input center">E2</td><td class="io-name">Timeout</td><td class="io-init center">4</td><td class="io-descr">Discovery wait time in seconds.</td></tr>
+    <tr><td class="io-nr input center">E1</td><td class="io-name">HttpPort</td><td class="io-init center">8080</td><td class="io-descr">Preferred admin HTTP port. Falls back to 8081-8083 if busy.</td></tr>
+    <tr><td class="io-nr input center">E2</td><td class="io-name">AutoDiscoverInterval</td><td class="io-init center">300</td><td class="io-descr">Periodic SSDP rescan interval in seconds. Minimum 60.</td></tr>
+    <tr><td class="io-nr input center">E3</td><td class="io-name">TriggerDiscovery</td><td class="io-init center">0</td><td class="io-descr">Rising edge starts an immediate SSDP scan. Wire to a KNX button for on-demand discovery.</td></tr>
+    <tr><td class="io-nr input center">E4</td><td class="io-name">DiscoveryTimeout</td><td class="io-init center">4</td><td class="io-descr">Per-scan SSDP wait time in seconds.</td></tr>
+    <tr><td class="io-nr input center">E5</td><td class="io-name">CloudClientId</td><td class="io-init string center"></td><td class="io-descr">Sonos developer client ID. Optional; the UI can also set this.</td></tr>
+    <tr><td class="io-nr input center">E6</td><td class="io-name">CloudClientSecret</td><td class="io-init string center"></td><td class="io-descr">Sonos developer client secret. Optional.</td></tr>
+    <tr><td class="io-nr input center">E7</td><td class="io-name">OAuthRedirectBase</td><td class="io-init string center"></td><td class="io-descr">External URL the HomeServer is reachable at, e.g. http://192.168.1.10:8080. OAuth callback is at this URL + /oauth/callback.</td></tr>
   </table>
 </div>
 
 <div class="topic">
-  <h2 class="t-line">
-    <a id="auto_index_anchor_3_"></a>
-    <span class="t-chapter">3.</span><span class="t-text">Outputs</span>
-  </h2>
+  <h2 class="t-line"><a id="auto_index_anchor_3_"></a><span class="t-chapter">3.</span><span class="t-text">Outputs</span></h2>
   <table class="table-out">
     <tr><td class="io-nr center">A#</td><td class="io-name">Name</td><td class="io-init center">Init</td><td class="o-sbc center">SBC</td><td class="io-descr">Description</td></tr>
-    <tr><td class="io-nr output center">A1</td><td class="io-name">Result</td><td class="io-init string center"></td><td class="o-sbc center">yes</td><td class="io-descr">Newline separated list of discovered players. Format ip;uuid;model.</td></tr>
-    <tr><td class="io-nr output center">A2</td><td class="io-name">Count</td><td class="io-init center">0</td><td class="o-sbc center">yes</td><td class="io-descr">Number of players found.</td></tr>
-    <tr><td class="io-nr output center">A3</td><td class="io-name">Error</td><td class="io-init string center"></td><td class="o-sbc center">yes</td><td class="io-descr">Last error message or empty on success.</td></tr>
+    <tr><td class="io-nr output center">A1</td><td class="io-name">ListenPort</td><td class="io-init center">0</td><td class="o-sbc center">yes</td><td class="io-descr">Actual TCP port the web UI is bound on.</td></tr>
+    <tr><td class="io-nr output center">A2</td><td class="io-name">PlayerCount</td><td class="io-init center">0</td><td class="o-sbc center">yes</td><td class="io-descr">Players currently in the registry (SSDP plus manual).</td></tr>
+    <tr><td class="io-nr output center">A3</td><td class="io-name">StationCount</td><td class="io-init center">0</td><td class="o-sbc center">yes</td><td class="io-descr">Configured radio stations.</td></tr>
+    <tr><td class="io-nr output center">A4</td><td class="io-name">CloudAuthorized</td><td class="io-init center">0</td><td class="o-sbc center">yes</td><td class="io-descr">1 when a Sonos Cloud OAuth access token has been captured.</td></tr>
+    <tr><td class="io-nr output center">A5</td><td class="io-name">DiscoveredPlayers</td><td class="io-init string center"></td><td class="o-sbc center">yes</td><td class="io-descr">Last scan result. Newline-separated ip;uuid;model rows.</td></tr>
+    <tr><td class="io-nr output center">A6</td><td class="io-name">LastDiscoveryCount</td><td class="io-init center">0</td><td class="o-sbc center">yes</td><td class="io-descr">Number of players seen in the last scan.</td></tr>
+    <tr><td class="io-nr output center">A7</td><td class="io-name">LastError</td><td class="io-init string center"></td><td class="o-sbc center">yes</td><td class="io-descr">Last error message (e.g. PORT_BIND_FAILED).</td></tr>
   </table>
 </div>
 
 <div class="topic">
-  <h2 class="t-line">
-    <a id="auto_index_anchor_4_"></a>
-    <span class="t-chapter">4.</span><span class="t-text">Other</span>
-  </h2>
+  <h2 class="t-line"><a id="auto_index_anchor_4_"></a><span class="t-chapter">4.</span><span class="t-text">Other</span></h2>
   <table class="table-logic-info">
     <tr><td>LBS</td><td>22001</td></tr>
     <tr><td>Version</td><td>1.0.0</td></tr>
     <tr><td>Firmware</td><td>HSL3, HS 4.13 or newer</td></tr>
     <tr><td>External libraries</td><td>requests (bundled)</td></tr>
-    <tr><td>Network</td><td>UDP 1900 multicast on the LAN</td></tr>
+    <tr><td>Network</td><td>TCP 8080 inbound (web UI), UDP 1900 multicast (SSDP), HTTPS outbound (OAuth)</td></tr>
+    <tr><td>UI URL</td><td>http://&lt;homeserver-ip&gt;:8080/</td></tr>
+    <tr><td>OAuth callback</td><td>OAuthRedirectBase + /oauth/callback</td></tr>
+    <tr><td>History</td><td>This module replaces previously-separate LBS 22001 (Discover) and LBS 22002 (Admin); their functionality is fully preserved.</td></tr>
   </table>
 </div>
 

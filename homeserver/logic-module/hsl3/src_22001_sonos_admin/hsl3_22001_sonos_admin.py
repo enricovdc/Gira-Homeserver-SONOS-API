@@ -1,4 +1,4 @@
-"""LBS 22002 - Sonos Admin.
+"""LBS 22001 - Sonos Admin.
 
 Singleton (one instance per HomeServer) that starts a small HTTP server
 on port 8080 and serves a single-page web UI for managing the Sonos
@@ -8,16 +8,25 @@ integration:
   - A library of radio stations (name + stream URI).
   - Sonos Cloud Control API OAuth credentials and token capture.
 
-It also runs a periodic SSDP scan and maintains a class-level
-**player registry** that LBS 22000 (Sonos Player) consults whenever its
-``Host`` input is a friendly name or a MAC address instead of a literal
-IP. This makes the configured player references survive DHCP renumbering
-on networks that don't reserve addresses.
+It runs both periodic and KNX-triggerable SSDP discovery, exposes the
+latest scan result on a structured output (newline-separated
+``ip;uuid;model`` list), and maintains a class-level **player registry**
+that LBS 22000 (Sonos Player) consults whenever its ``Host`` input is a
+friendly name or a MAC address instead of a literal IP. This makes the
+configured player references survive DHCP renumbering on networks that
+don't reserve addresses.
 
 Backward compatibility: LBS 22000 still works standalone. If no Admin
 instance is on the canvas, ``Host`` must be an IP, exactly as before.
 When Admin is present and a player's IP changes, the next ARP refresh
 picks it up and LBS 22000's next tick uses the new IP.
+
+This module supersedes the previously-separate LBS 22001 Sonos Discover
+and LBS 22002 Sonos Admin nodes. Discover's KNX-friendly outputs
+(``Result``, ``Count``, ``Error``) are present here as
+``DiscoveredPlayers``, ``LastDiscoveryCount`` and ``LastError``; its
+``Trigger`` input is the existing ``TriggerDiscovery``; its ``Timeout``
+input is the new ``DiscoveryTimeout``.
 """
 
 import json
@@ -281,10 +290,11 @@ def _fetch_model(location):
         return ""
 
 
-def discover_and_merge():
+def scan_and_merge(timeout_sec=4):
     """Run an SSDP scan; merge results into the registry. Manually-added
-    players keep their `source = "manual"` flag and are not overwritten."""
-    discovered = _ssdp_scan()
+    players keep their `source = "manual"` flag and are not overwritten.
+    Returns the raw scan list (each item: {ip, uuid, model})."""
+    discovered = _ssdp_scan(timeout_sec)
     arp = _read_arp_table()
     now = time.time()
     with _registry_lock:
@@ -317,7 +327,12 @@ def discover_and_merge():
                 _players[existing]["lastSeen"] = now
             else:
                 _players[rec["id"]] = rec
-    return len(discovered)
+    return discovered
+
+
+def discover_and_merge(timeout_sec=4):
+    """Backwards-compat wrapper kept so older callers see an int count."""
+    return len(scan_and_merge(timeout_sec))
 
 
 # ---------------------------------------------------------------------------
@@ -716,7 +731,9 @@ class LogicModule:
         self.listener_port = 0
         self.server_thread = None
         self._auto_discover_s = DEFAULT_AUTO_DISCOVER_S
+        self._discovery_timeout = 4
         self._last_discovery_at = 0.0
+        self._last_discovered = []   # list of {ip, uuid, model}
 
     # ----- HSL3 entry points -----------------------------------------------
 
@@ -731,6 +748,7 @@ class LogicModule:
         # Read configuration inputs.
         port = int(inputs["HttpPort"].value or ADMIN_PORT_DEFAULT)
         self._auto_discover_s = max(60, int(inputs["AutoDiscoverInterval"].value or DEFAULT_AUTO_DISCOVER_S))
+        self._discovery_timeout = max(1, int(inputs["DiscoveryTimeout"].value or 4))
         # Pre-seed cloud config from inputs (the UI can override at runtime).
         with _registry_lock:
             _cloud["clientId"] = self._decode(inputs["CloudClientId"].value)
@@ -759,6 +777,7 @@ class LogicModule:
     def on_calc(self, inputs):
         # Allow the integrator to re-tune at runtime; HTTP server stays bound.
         self._auto_discover_s = max(60, int(inputs["AutoDiscoverInterval"].value or DEFAULT_AUTO_DISCOVER_S))
+        self._discovery_timeout = max(1, int(inputs["DiscoveryTimeout"].value or 4))
         if inputs["TriggerDiscovery"].changed and inputs["TriggerDiscovery"].value:
             self._spawn_discovery()
 
@@ -802,16 +821,22 @@ class LogicModule:
 
     def _run_discovery(self):
         try:
-            n = discover_and_merge()
+            discovered = scan_and_merge(self._discovery_timeout)
             self._last_discovery_at = time.time()
-            self.fw.run_in_context(self._post_discovery, (n,))
+            self._last_discovered = discovered
+            self.fw.run_in_context(self._post_discovery, (discovered,))
         except Exception as exc:  # noqa: BLE001
             self.fw.run_in_context(self._write_error, ("DISCOVERY: " + str(exc),))
 
-    def _post_discovery(self, n):
+    def _post_discovery(self, discovered):
+        n = len(discovered)
         if self.debug is not None:
             self.debug.set("Last discovery", time.strftime("%H:%M:%S"))
             self.debug.set("Discovered", float(n))
+        # KNX-friendly outputs: newline-separated ip;uuid;model + count.
+        text = "\n".join("{};{};{}".format(d["ip"], d["uuid"], d["model"]) for d in discovered)
+        self.fw.set_output("DiscoveredPlayers", text.encode("iso-8859-15", "replace"))
+        self.fw.set_output("LastDiscoveryCount", float(n))
         self._publish_counters()
 
     def _publish_counters(self):
@@ -925,10 +950,13 @@ class LogicModule:
         return {"ok": True}
 
     def api_discover_now(self):
-        n = discover_and_merge()
+        discovered = scan_and_merge(self._discovery_timeout)
         self._last_discovery_at = time.time()
-        self._publish_counters()
-        return {"ok": True, "discovered": n}
+        self._last_discovered = discovered
+        # Mirror the same outputs the periodic scan publishes so KNX-side
+        # consumers see the result regardless of who triggered the scan.
+        self.fw.run_in_context(self._post_discovery, (discovered,))
+        return {"ok": True, "discovered": len(discovered)}
 
     def api_add_station(self, body):
         name = (body.get("name") or "").strip()

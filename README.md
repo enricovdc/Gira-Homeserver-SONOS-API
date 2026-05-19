@@ -5,13 +5,12 @@ control Sonos players over the local UPnP/SOAP API. No bridge service,
 no external machine, no SSH access required — the integration runs
 entirely inside the HomeServer's own logic engine.
 
-Three LBS modules:
+Two LBS modules:
 
 | LBS | Name | Role |
 | --- | --- | --- |
 | **22000** | Sonos Player | One instance per Sonos player. Play / pause / stop / next / previous, volume, mute, eight configurable radio stations, status outputs, UPnP event push. |
-| **22001** | Sonos Discover | KNX-triggered SSDP M-SEARCH to find players on the LAN. Optional. |
-| **22002** | Sonos Admin | Singleton companion that runs a web UI at `http://<hs-ip>:8080/` for managing players (by **IP and/or MAC**), a global radio-station library, and Sonos Cloud OAuth — all from inside HSL3, no external process. Optional. |
+| **22001** | Sonos Admin | Singleton companion. Web UI at `http://<hs-ip>:8080/` for managing players (by **IP and/or MAC**), a global radio-station library, and Sonos Cloud OAuth. Also runs periodic + KNX-triggerable SSDP discovery with a structured `DiscoveredPlayers` output. All inside HSL3, no external process. Optional but recommended. |
 
 Compatible with Sonos firmware **2024+ and 2026** and Gira HomeServer
 firmware **4.13+** (HSL3 / Python 3.9 logic-module SDK).
@@ -31,7 +30,7 @@ firmware **4.13+** (HSL3 / Python 3.9 logic-module SDK).
   fallback ladder for players that reject the first attempt.
 - **Per-player radio** (8 configurable stations per LBS 22000 instance)
   **or** a shared global station library managed via the Admin web UI.
-- **Web admin UI** (LBS 22002, optional): runs at
+- **Web admin UI** (LBS 22001, optional): runs at
   `http://<hs-ip>:8080/` *from inside HSL3* — no external process.
   Manage discovered + manually-added players (by **IP and/or MAC**;
   MAC is preferred under DHCP because the registry auto-refreshes
@@ -62,10 +61,10 @@ firmware **4.13+** (HSL3 / Python 3.9 logic-module SDK).
    ```
 
    Output: `homeserver/logic-module/hsl3/build/dist/22000_sonos_player.hslz`
-   and `22001_sonos_discover.hslz`.
+   and `22001_sonos_admin.hslz`.
 
 2. **Import in Experte.** *Logikbausteine → Importieren* → pick the
-   three `.hslz` files. The blocks appear under **Multimedia → Sonos**.
+   two `.hslz` files. The blocks appear under **Multimedia → Sonos**.
 
 3. **(Recommended) Add the Admin block.** Drop a *Sonos Admin* block
    onto the canvas. Download. Browse to
@@ -98,11 +97,11 @@ homeserver/
     ├── hsl3/                              the HSL3 deliverable
     │   ├── README.md                      detailed module reference
     │   ├── src_22000_sonos_player/        LogicModule source + config.json
-    │   ├── src_22001_sonos_discover/      LogicModule source + config.json
+    │   ├── src_22001_sonos_admin/         LogicModule source + config.json (web UI + discovery + OAuth)
     │   ├── help/                          EN + DE help pages, SDK style.css
     │   └── build/
     │       ├── build_hslz.py              packager (.hslz archives)
-    │       └── test_logic_modules.py      15 unit tests with framework stub
+    │       └── test_logic_modules.py      30 unit tests with framework stub
     └── soap/                              SOAP envelope XML reference
                                            (the same wire format the .py uses)
 ```

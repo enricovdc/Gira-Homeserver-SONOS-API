@@ -2,18 +2,18 @@
 <html>
 <head>
 <link rel="stylesheet" href="../style.css">
-<title>Logik - Sonos Suche</title>
+<title>Logik - Sonos Admin</title>
 <style>body { background: none; }</style>
 <meta http-equiv="Content-Type" content="text/html;charset=utf-8">
 </head>
 <body>
-<div class="top-title">Sonos Suche</div>
+<div class="top-title">Sonos Admin</div>
 <div class="nav">
   <a href="javascript:history.back()">Zurueck</a> /
   <a href="javascript:history.forward()">Weiter</a> |
   <a href="hlpsearch.html">Suche</a> |
   <a href="index.html">Hilfe</a> /
-  <a href="logic.html">Logik</a> / Sonos Suche
+  <a href="logic.html">Logik</a> / Sonos Admin
 </div>
 
 <div class="index">
@@ -29,12 +29,24 @@
 <div class="topic">
   <h2 class="t-line"><a id="auto_index_anchor_1_"></a><span class="t-chapter">1.</span><span class="t-text">Beschreibung</span></h2>
   <div class="descr">
-    Fuehrt eine SSDP M-SEARCH im lokalen Netzwerk aus und sucht alle vom HomeServer erreichbaren Sonos Player. Liefert eine zeilenweise Liste am Result Ausgang im Format ip;uuid;model.
+    Einzelinstanz-Begleitbaustein, der einen HTTP-Server innerhalb von HSL3 startet und eine Web-Administrationsoberflaeche fuer die Sonos-Integration bereitstellt. Die UI verwaltet automatisch gefundene und manuell hinzugefuegte Sonos-Player (per IP und/oder MAC), eine globale Radiosender-Bibliothek und die Sonos Cloud Control API Zugangsdaten mit OAuth-Autorisierung direkt vom HomeServer aus.
+  </div>
+  <div class="descr">
+    Der Baustein fuehrt sowohl periodische als auch KNX-ausloesbare SSDP-Suchen aus. Das letzte Suchergebnis wird als zeilenweise Liste ip;uuid;model am Ausgang DiscoveredPlayers und als Anzahl am Ausgang LastDiscoveryCount bereitgestellt.
+  </div>
+  <div class="descr">
+    Der Baustein fuehrt ein klassenweites Player-Register, das LBS 22000 Sonos Player nutzt, wenn dessen Host-Eingang ein Name oder eine MAC-Adresse statt einer IP ist. Damit bleiben konfigurierte Player-Referenzen auch bei DHCP-Adresswechsel stabil.
   </div>
   <div class="alert-box ibox-hint">
     <div class="box-title">Hinweis</div>
     <div class="box-text"><div class="descr">
-      Verwenden Sie diesen Baustein einmalig zur Inbetriebnahme um das Host Feld jedes Sonos Player Bausteins zu fuellen. SSDP funktioniert nur in derselben Broadcast-Domain.
+      LBS 22000 funktioniert auch ohne diesen Admin-Baustein, dann allerdings nur mit fester IP. Fuegen Sie den Admin-Baustein hinzu, um die Web-UI, KNX-ausloesbare Suche, die gemeinsame Senderliste oder DHCP-feste Player-Referenzen zu bekommen.
+    </div></div>
+  </div>
+  <div class="alert-box ibox-warn">
+    <div class="box-title">Wichtig</div>
+    <div class="box-text"><div class="descr">
+      Der Baustein oeffnet TCP-Port 8080 (oder den naechsten freien bis 8083). Die Web-UI ist nicht authentifiziert und sollte nur im lokalen Netzwerk erreichbar sein.
     </div></div>
   </div>
 </div>
@@ -43,8 +55,13 @@
   <h2 class="t-line"><a id="auto_index_anchor_2_"></a><span class="t-chapter">2.</span><span class="t-text">Eingaenge</span></h2>
   <table class="table-in">
     <tr><td class="io-nr center">E#</td><td class="io-name">Name</td><td class="io-init center">Init</td><td class="io-descr">Beschreibung</td></tr>
-    <tr><td class="io-nr input center">E1</td><td class="io-name">Trigger</td><td class="io-init center">0</td><td class="io-descr">Startet einen SSDP Suchlauf.</td></tr>
-    <tr><td class="io-nr input center">E2</td><td class="io-name">Timeout</td><td class="io-init center">4</td><td class="io-descr">Wartezeit in Sekunden.</td></tr>
+    <tr><td class="io-nr input center">E1</td><td class="io-name">HttpPort</td><td class="io-init center">8080</td><td class="io-descr">Bevorzugter Admin HTTP-Port. Faellt auf 8081-8083 zurueck.</td></tr>
+    <tr><td class="io-nr input center">E2</td><td class="io-name">AutoDiscoverInterval</td><td class="io-init center">300</td><td class="io-descr">Periodischer SSDP-Suchzyklus in Sekunden. Minimum 60.</td></tr>
+    <tr><td class="io-nr input center">E3</td><td class="io-name">TriggerDiscovery</td><td class="io-init center">0</td><td class="io-descr">Startet sofortige SSDP-Suche.</td></tr>
+    <tr><td class="io-nr input center">E4</td><td class="io-name">DiscoveryTimeout</td><td class="io-init center">4</td><td class="io-descr">Wartezeit pro Suche in Sekunden.</td></tr>
+    <tr><td class="io-nr input center">E5</td><td class="io-name">CloudClientId</td><td class="io-init string center"></td><td class="io-descr">Sonos Developer Client ID. Optional.</td></tr>
+    <tr><td class="io-nr input center">E6</td><td class="io-name">CloudClientSecret</td><td class="io-init string center"></td><td class="io-descr">Sonos Developer Client Secret. Optional.</td></tr>
+    <tr><td class="io-nr input center">E7</td><td class="io-name">OAuthRedirectBase</td><td class="io-init string center"></td><td class="io-descr">Externe URL des HomeServers, z.B. http://192.168.1.10:8080.</td></tr>
   </table>
 </div>
 
@@ -52,9 +69,13 @@
   <h2 class="t-line"><a id="auto_index_anchor_3_"></a><span class="t-chapter">3.</span><span class="t-text">Ausgaenge</span></h2>
   <table class="table-out">
     <tr><td class="io-nr center">A#</td><td class="io-name">Name</td><td class="io-init center">Init</td><td class="o-sbc center">SBC</td><td class="io-descr">Beschreibung</td></tr>
-    <tr><td class="io-nr output center">A1</td><td class="io-name">Result</td><td class="io-init string center"></td><td class="o-sbc center">ja</td><td class="io-descr">Zeilenweise Liste ip;uuid;model.</td></tr>
-    <tr><td class="io-nr output center">A2</td><td class="io-name">Count</td><td class="io-init center">0</td><td class="o-sbc center">ja</td><td class="io-descr">Anzahl gefundener Geraete.</td></tr>
-    <tr><td class="io-nr output center">A3</td><td class="io-name">Error</td><td class="io-init string center"></td><td class="o-sbc center">ja</td><td class="io-descr">Letzte Fehlermeldung.</td></tr>
+    <tr><td class="io-nr output center">A1</td><td class="io-name">ListenPort</td><td class="io-init center">0</td><td class="o-sbc center">ja</td><td class="io-descr">Tatsaechlich gebundener TCP-Port der Web-UI.</td></tr>
+    <tr><td class="io-nr output center">A2</td><td class="io-name">PlayerCount</td><td class="io-init center">0</td><td class="o-sbc center">ja</td><td class="io-descr">Anzahl Player im Register.</td></tr>
+    <tr><td class="io-nr output center">A3</td><td class="io-name">StationCount</td><td class="io-init center">0</td><td class="o-sbc center">ja</td><td class="io-descr">Konfigurierte Radiosender.</td></tr>
+    <tr><td class="io-nr output center">A4</td><td class="io-name">CloudAuthorized</td><td class="io-init center">0</td><td class="o-sbc center">ja</td><td class="io-descr">1 wenn Sonos Cloud OAuth Token vorhanden.</td></tr>
+    <tr><td class="io-nr output center">A5</td><td class="io-name">DiscoveredPlayers</td><td class="io-init string center"></td><td class="o-sbc center">ja</td><td class="io-descr">Letztes Suchergebnis als ip;uuid;modell pro Zeile.</td></tr>
+    <tr><td class="io-nr output center">A6</td><td class="io-name">LastDiscoveryCount</td><td class="io-init center">0</td><td class="o-sbc center">ja</td><td class="io-descr">Anzahl Treffer der letzten Suche.</td></tr>
+    <tr><td class="io-nr output center">A7</td><td class="io-name">LastError</td><td class="io-init string center"></td><td class="o-sbc center">ja</td><td class="io-descr">Letzte Fehlermeldung.</td></tr>
   </table>
 </div>
 
@@ -64,7 +85,10 @@
     <tr><td>LBS</td><td>22001</td></tr>
     <tr><td>Version</td><td>1.0.0</td></tr>
     <tr><td>Firmware</td><td>HSL3, HS 4.13 oder neuer</td></tr>
-    <tr><td>Netzwerk</td><td>UDP 1900 Multicast</td></tr>
+    <tr><td>Externe Bibliotheken</td><td>requests (gebuendelt)</td></tr>
+    <tr><td>Netzwerk</td><td>TCP 8080 eingehend (Web-UI), UDP 1900 (SSDP), HTTPS ausgehend (OAuth)</td></tr>
+    <tr><td>UI URL</td><td>http://&lt;homeserver-ip&gt;:8080/</td></tr>
+    <tr><td>Historie</td><td>Ersetzt die zuvor getrennten LBS 22001 (Discover) und LBS 22002 (Admin).</td></tr>
   </table>
 </div>
 
