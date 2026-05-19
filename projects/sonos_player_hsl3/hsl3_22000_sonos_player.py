@@ -893,6 +893,14 @@ class LogicModule:
             self._run_control_threaded(lambda: self._action_adjust_volume(+self._vol_step))
         if inputs["VolDown"].changed and inputs["VolDown"].value != 0:
             self._run_control_threaded(lambda: self._action_adjust_volume(-self._vol_step))
+        # KNX DPT 1.008 "Up/Down" rocker — wire the single group address
+        # straight to VolUpDown. Each write (1 = up, 0 = down) dispatches
+        # one step of size VolStep. Saves the integrator a pair of helper
+        # logic blocks that would otherwise route Up to VolUp and Down to
+        # VolDown.
+        if inputs["VolUpDown"].changed:
+            delta = +self._vol_step if inputs["VolUpDown"].value else -self._vol_step
+            self._run_control_threaded(lambda d=delta: self._action_adjust_volume(d))
 
         if inputs["SetMute"].changed:
             mute = inputs["SetMute"].value != 0

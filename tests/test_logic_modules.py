@@ -151,6 +151,7 @@ def make_player_inputs(host="10.0.0.1", **overrides):
         "SetVolume":    StubSlot(0),
         "VolUp":        StubSlot(0),
         "VolDown":      StubSlot(0),
+        "VolUpDown":    StubSlot(0),
         "SetMute":      StubSlot(0),
         "MuteToggle":   StubSlot(0),
         "SetShuffle":   StubSlot(0),
@@ -486,6 +487,29 @@ class TestSonosPlayerLogicModule(unittest.TestCase):
         ins["PlayPause"] = StubSlot(0, changed=True)
         lm.on_calc(ins)
         self.assertEqual(actions, ["pause"])
+
+    def test_volupdown_dispatches_by_value(self):
+        """VolUpDown takes a DPT 1.008 rocker straight: 1 = up by
+        VolStep, 0 = down by VolStep. Avoids the two-branch helper
+        logic block that used to be required."""
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        deltas = []
+        lm._action_adjust_volume = lambda d: deltas.append(d)
+        lm._run_control_threaded = lambda fn: fn()
+        lm._host = "10.0.0.1"
+        # VolStep is reloaded from inputs on every on_calc, so set it
+        # via the slot map rather than via the attribute.
+        ins = make_player_inputs(host="10.0.0.1", VolStep=3)
+        ins["VolUpDown"] = StubSlot(1, changed=True)
+        lm.on_calc(ins)
+        self.assertEqual(deltas, [+3])
+        deltas.clear()
+        ins = make_player_inputs(host="10.0.0.1", VolStep=3)
+        ins["VolUpDown"] = StubSlot(0, changed=True)
+        lm.on_calc(ins)
+        self.assertEqual(deltas, [-3])
 
     def test_nextprev_input_dispatches_by_value(self):
         fw = StubFramework()

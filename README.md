@@ -69,7 +69,7 @@ firmware **4.13+** (HSL3 / Python 3.9 logic-module SDK).
   On S1 hardware (no AudioClip service) it falls back to a snapshot /
   play / restore cycle. Library starts empty; drop in any MP3 / WAV /
   AAC / OGG / FLAC up to 2 MB.
-- **95 unit tests** with a stubbed `Hsl3Framework`, runnable in CI.
+- **96 unit tests** with a stubbed `Hsl3Framework`, runnable in CI.
 
 ## Repository layout
 
@@ -90,7 +90,7 @@ firmware **4.13+** (HSL3 / Python 3.9 logic-module SDK).
 ├── scripts/
 │   └── build_hslz.py            packager → dist/*.hslz
 ├── tests/
-│   └── test_logic_modules.py    95 unit tests with a stubbed framework
+│   └── test_logic_modules.py    96 unit tests with a stubbed framework
 └── dist/
     ├── 22000_sonos_player.hslz  deployable archive (committed)
     └── 22001_sonos_admin.hslz
@@ -138,7 +138,7 @@ on a machine that has the SDK.
 python3 tests/test_logic_modules.py
 ```
 
-95 tests covering: pure helpers (SOAP fault extraction, NOTIFY parsing,
+96 tests covering: pure helpers (SOAP fault extraction, NOTIFY parsing,
 URI normalisation, play-mode composition, transport-actions parsing,
 iso-8859-15 encoding), the
 `LogicModule` IO contract (string outputs are bytes, numeric outputs

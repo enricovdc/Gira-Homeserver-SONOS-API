@@ -50,10 +50,8 @@ KNX group address whose flipping drives the action.
 | 5/0/20 | 5.001 | `SetVolume`  | Absolute volume 0–100 % |
 | 5/0/21 | 1.001 | `VolUp`      | Rising edge adds `VolStep` |
 | 5/0/22 | 1.001 | `VolDown`    | Rising edge subtracts `VolStep` |
-| 5/0/23 | 1.001 | `SetMute`    | 1 = mute, 0 = unmute |
-
-For a DPT 1.008 "Up/Down" rocker, route Up to `VolUp` and Down to
-`VolDown` with two small logic-block branches.
+| 5/0/23 | 1.008 | `VolUpDown`  | DPT 1.008 "Up/Down" rocker — wire the single 1-bit GA straight in. Each write of 1 adds `VolStep`, each write of 0 subtracts. No helper logic blocks needed. |
+| 5/0/24 | 1.001 | `SetMute`    | 1 = mute, 0 = unmute |
 
 ### Play mode (shuffle / repeat)
 

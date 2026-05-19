@@ -2,7 +2,7 @@
 
 Run through this list against real Sonos hardware when commissioning
 the HSL3 modules, after a Sonos firmware update, or after network
-changes. The 95 unit tests under `tests/test_logic_modules.py` cover
+changes. The 96 unit tests under `tests/test_logic_modules.py` cover
 the pure logic against a stubbed framework; this checklist is for
 hardware-in-the-loop validation.
 
@@ -63,6 +63,9 @@ Trigger the corresponding KNX address (or simulate the input in Experte):
 - [ ] Write `15` to `SetVolume` → player at 15 %. `Volume` output reads 15.
 - [ ] Trigger `VolUp` (with `VolStep = 5`) → player at 20.
 - [ ] Trigger `VolDown` → player at 15.
+- [ ] Write 1 to `VolUpDown` → volume rises by `VolStep`. Write 0 →
+      volume falls by `VolStep`. This is the DPT 1.008 rocker path —
+      a single KNX 1-bit GA drives both directions without helper logic.
 - [ ] Write `150` to `SetVolume` → clamped to 100 (output reads 100).
 - [ ] Write 1 to `SetMute` → muted, `Mute` output reads 1.
 
