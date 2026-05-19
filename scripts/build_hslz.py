@@ -37,25 +37,24 @@ import sys
 import zipfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[4]
-HSL3_DIR = ROOT / "homeserver" / "logic-module" / "hsl3"
-DIST_DIR = HSL3_DIR / "build" / "dist"
-STYLE_CSS = HSL3_DIR / "help" / "style.css"
-HELP_EN = HSL3_DIR / "help" / "en"
-HELP_DE = HSL3_DIR / "help" / "de"
+ROOT = Path(__file__).resolve().parents[1]
+DIST_DIR = ROOT / "dist"
+STYLE_CSS = ROOT / "help" / "style.css"
+HELP_EN = ROOT / "help" / "en"
+HELP_DE = ROOT / "help" / "de"
 
 
 MODULES = [
     {
         "id": "22000",
         "name": "sonos_player",
-        "src_dir": HSL3_DIR / "src_22000_sonos_player",
+        "src_dir": ROOT / "projects" / "sonos_player_hsl3",
         "hsl_name": "22000_sonos_player.hsl",
     },
     {
         "id": "22001",
         "name": "sonos_admin",
-        "src_dir": HSL3_DIR / "src_22001_sonos_admin",
+        "src_dir": ROOT / "projects" / "sonos_admin_hsl3",
         "hsl_name": "22001_sonos_admin.hsl",
     },
 ]
@@ -205,8 +204,8 @@ def _readme_inside(module: dict, hsl_included: bool) -> str:
         "# To finalize on a machine with the Gira Experte SDK installed:\n"
         "#\n"
         "#   1. Take the source from this repository:\n"
-        f"#        homeserver/logic-module/hsl3/src_{lbs_id}_{name}/hsl3_{lbs_id}_{name}.py\n"
-        f"#        homeserver/logic-module/hsl3/src_{lbs_id}_{name}/config.json\n"
+        f"#        projects/{name}_hsl3/hsl3_{lbs_id}_{name}.py\n"
+        f"#        projects/{name}_hsl3/config.json\n"
         "#\n"
         "#   2. Run the generator:\n"
         "#        python3.9 generator3.cpython-39.pyc \\\n"

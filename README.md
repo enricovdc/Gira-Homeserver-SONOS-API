@@ -9,8 +9,8 @@ Two LBS modules:
 
 | LBS | Name | Role |
 | --- | --- | --- |
-| **22000** | Sonos Player | One instance per Sonos player. Play / pause / stop / next / previous, volume, mute, eight configurable radio stations, status outputs, UPnP event push. |
-| **22001** | Sonos Admin | Singleton companion. Web UI at `http://<hs-ip>:8080/` for managing players (by **IP and/or MAC**), a global radio-station library, and Sonos Cloud OAuth. Also runs periodic + KNX-triggerable SSDP discovery with a structured `DiscoveredPlayers` output. All inside HSL3, no external process. Optional but recommended. |
+| **22000** | Sonos Player | One instance per Sonos player. Play / pause / stop / next / prev, volume, mute, shuffle, repeat, status outputs (including discrete Is\* booleans, Album, AlbumArtURI, group info), UPnP event push, preset playback through the Admin library. |
+| **22001** | Sonos Admin | Singleton companion. Web UI at `http://<hs-ip>:8080/` for managing players (by **UUID / MAC / IP / name**), a global preset library (radio / playlists / line-in / Bluetooth), group presets, project-wide Player Defaults, and Sonos Cloud OAuth. Runs periodic + KNX-triggerable SSDP discovery with a structured `DiscoveredPlayers` output. All inside HSL3, no external process. Optional but recommended. |
 
 Compatible with Sonos firmware **2024+ and 2026** and Gira HomeServer
 firmware **4.13+** (HSL3 / Python 3.9 logic-module SDK).
@@ -20,152 +20,131 @@ firmware **4.13+** (HSL3 / Python 3.9 logic-module SDK).
 - **Pure HomeServer install.** Import the `.hslz` archives in Experte
   via *Logikbausteine → Importieren*. No bridge, no SSH, no Linux box.
 - **Local control only.** Talks to Sonos players directly via SOAP on
-  port 1400. No Sonos OAuth required, no developer registration, no
-  rate limits, no cloud dependency.
+  port 1400. No Sonos OAuth required for control, no developer
+  registration, no rate limits, no cloud dependency.
 - **UPnP event push.** Each player subscribes to AVTransport +
   RenderingControl events; status outputs update in ~1 s when state
   changes externally (Sonos app, AirPlay handoff, volume knob).
 - **Firmware-2026 hardening.** Metadata-free SetAVTransportURI, the
   `x-rincon-mp3radio://` direct-broadcast scheme, and an automatic
-  fallback ladder for players that reject the first attempt.
-- **Per-player radio** (8 configurable stations per LBS 22000 instance)
-  **or** a shared global station library managed via the Admin web UI.
+  fallback ladder for players that reject the first attempt. Container
+  URIs (Spotify / Apple / Sonos saved queues) take the queue-and-play
+  path so playlists actually play.
 - **Web admin UI** (LBS 22001, optional): runs at
   `http://<hs-ip>:8080/` *from inside HSL3* — no external process.
-  Manage discovered + manually-added players (by **IP and/or MAC**;
-  MAC is preferred under DHCP because the registry auto-refreshes
-  IP-from-MAC via `/proc/net/arp` on every scan), edit the station
-  library, and authorize Sonos Cloud OAuth.
+  Manage discovered + manually-added players, browse a player's
+  Favorites (FV:2) + audio inputs (AI:) + saved playlists (SQ:), edit
+  the global preset library, define group presets, set project-wide
+  Player Defaults (PollInterval / SubTimeout / HttpTimeout /
+  CallbackBase), authorize Sonos Cloud OAuth.
 - **DHCP-resilient player references.** When Admin is present, LBS
-  22000's `Host` input accepts IP / MAC / name / UUID. DHCP renumbering
-  no longer breaks wiring — the registry re-resolves on every Tick.
-- **Cloud-ready.** Admin's OAuth handler captures Sonos Cloud Control
-  API tokens (client_id + client_secret + redirect_uri configured in
-  the UI). Local SOAP remains the primary path; the tokens are
-  plumbing for a future cloud-fallback LBS.
-- **KNX-friendly outputs.** Online, State, Volume, Mute, Title, Artist,
-  ActiveStation, LastError, Subscribed — wire to group addresses with
-  the recommended DPTs in [homeserver/KNX-MAPPING.md](homeserver/KNX-MAPPING.md).
+  22000's `Host` input accepts UUID / MAC / name / IP. UUID is
+  preferred — stable across firmware updates and DHCP renumbering.
+- **Group presets.** Predefine master + members in the Admin UI;
+  trigger `GroupPreset` on any Player block to form the group.
+  `Ungroup` breaks the player out again.
+- **KNX-friendly outputs.** ZoneName, Online, State, IsPlaying /
+  IsPaused / IsStopped / IsTransitioning, Volume, Mute, Title, Artist,
+  Album, AlbumArtURI, ShuffleState, RepeatState, GroupInfo,
+  IsCoordinator, ActiveStation, LastError, Subscribed — wire to group
+  addresses with the recommended DPTs in
+  [docs/KNX-MAPPING.md](docs/KNX-MAPPING.md).
+- **Persistence.** Admin's registries (players, presets, group
+  presets, cloud credentials, player defaults) survive HomeServer
+  restarts via HSL3 retentive stores.
 - **Graceful degradation.** If a listener can't bind, modules fall
   back to timer-based status polling and keep working.
-- **30 unit tests** with a stubbed `Hsl3Framework`, runnable in CI.
-
-## Quick start
-
-1. **Finalize the HSLZ archives** for Experte import. The repo ships
-   spec-compliant `.hslz` shells (help pages + SDK stylesheet) plus the
-   `.py` + `config.json` source. The Gira HSL3 generator
-   (`generator3.cpython-39.pyc`, shipped with the Experte SDK) turns
-   the source into the deployable `.hsl` that goes inside each archive.
-
-   On a machine that has the Experte SDK installed:
-
-   ```sh
-   # 1. Produce the deployable .hsl files.
-   cd homeserver/logic-module/hsl3
-   python3.9 /path/to/generator3.cpython-39.pyc \
-       --source src_22000_sonos_player/config.json \
-       --target  build/dist/22000_sonos_player.hsl
-   python3.9 /path/to/generator3.cpython-39.pyc \
-       --source src_22001_sonos_admin/config.json \
-       --target  build/dist/22001_sonos_admin.hsl
-
-   # 2. Drop the .hsl files into the matching .hslz (flat root):
-   cd build/dist
-   zip -j 22000_sonos_player.hslz 22000_sonos_player.hsl
-   zip -j 22001_sonos_admin.hslz  22001_sonos_admin.hsl
-   ```
-
-   Alternatively, point the build script at the generator and it does
-   both steps in one go:
-
-   ```sh
-   GIRA_HSL3_GEN=/path/to/generator3.cpython-39.pyc \
-   PYTHON39=/path/to/python3.9 \
-   python3 homeserver/logic-module/hsl3/build/build_hslz.py
-   ```
-
-   The committed `.hslz` archives are not directly importable until the
-   `.hsl` has been added; each archive's `README-INSIDE.txt` carries
-   these same finalize instructions.
-
-2. **Import in Experte.** *Logikbausteine → Importieren* → pick the
-   two `.hslz` files. The blocks appear under **Multimedia → Sonos**.
-
-3. **(Recommended) Add the Admin block.** Drop a *Sonos Admin* block
-   onto the canvas. Download. Browse to
-   `http://<hs-ip>:8080/` — discover players, add players manually by
-   IP and/or MAC, define the radio-station library, optionally
-   authorize Sonos Cloud.
-
-4. **Add a *Sonos Player* block per player.** Set `Host` to the
-   player's IP — or, with Admin loaded, to the player's MAC, name,
-   or UUID. Wire control inputs (Play, Pause, SetVolume, …) to KNX
-   group addresses. Wire status outputs to group addresses using
-   the DPTs in [homeserver/KNX-MAPPING.md](homeserver/KNX-MAPPING.md).
-
-5. **Configure radio stations.** Either write the stream URIs to the
-   player block's `Station1Uri … Station8Uri` inputs, or add them
-   in the Admin web UI's central library. Trigger playback by
-   writing the station index to `StartRadio`.
-
-6. **Download to HomeServer.** Within one Tick interval (~60 s) the
-   subscriptions register and status outputs populate.
+- **78 unit tests** with a stubbed `Hsl3Framework`, runnable in CI.
 
 ## Repository layout
 
 ```
-README.md                                  this file
-homeserver/
-├── KNX-MAPPING.md                         recommended group-address layout / DPTs
-└── logic-module/
-    ├── README.md                          logic-module overview
-    ├── hsl3/                              the HSL3 deliverable
-    │   ├── README.md                      detailed module reference
-    │   ├── src_22000_sonos_player/        LogicModule source + config.json
-    │   ├── src_22001_sonos_admin/         LogicModule source + config.json (web UI + discovery + OAuth)
-    │   ├── help/                          EN + DE help pages, SDK style.css
-    │   └── build/
-    │       ├── build_hslz.py              packager (.hslz archives)
-    │       └── test_logic_modules.py      30 unit tests with framework stub
-    └── soap/                              SOAP envelope XML reference
-                                           (the same wire format the .py uses)
+.
+├── README.md                    this file
+├── requirements.txt             runtime deps (just `requests`, bundled by Gira)
+├── docs/                        design / wire-format / commissioning reference
+├── help/                        EN + DE help pages and SDK style.css
+│   ├── en/log22000.html         English help, F1 in Experte
+│   ├── en/log22001.html
+│   ├── de/log22000.html
+│   ├── de/log22001.html
+│   └── style.css                SDK stylesheet
+├── projects/
+│   ├── sonos_player_hsl3/       LBS 22000 source: config.json + hsl3_22000_*.py
+│   └── sonos_admin_hsl3/        LBS 22001 source: config.json + hsl3_22001_*.py
+├── scripts/
+│   └── build_hslz.py            packager → dist/*.hslz
+├── tests/
+│   └── test_logic_modules.py    78 unit tests with a stubbed framework
+└── dist/
+    ├── 22000_sonos_player.hslz  deployable archive (committed)
+    └── 22001_sonos_admin.hslz
 ```
 
-## How it works
+## Quick start
 
-The Sonos Player module is a `LogicModule` class that runs in the
-HomeServer's HSL3 environment. On `on_init` it registers itself in a
-class-level `_instances_by_host` map and starts a shared NOTIFY HTTP
-listener (default port 8081, next-free fallback up to 8083). On every
-`on_calc` it detects which control input changed and dispatches the
-SOAP request in a daemon thread; output writes are marshalled back to
-node context via `self.fw.run_in_context(callback, params)` per the
-SDK contract. The `Tick` timer drives status polling and UPnP
-subscription renewal (re-subscribes automatically on HTTP 412 SID
-expiry).
+1. **Import the .hslz files in Experte.** *Logikbausteine →
+   Importieren* → pick the two archives from `dist/`. The blocks
+   appear under **Multimedia → Sonos**.
 
-When a Sonos player sends a NOTIFY callback to the listener, the
-parser pulls `TransportState`, `Volume`, `Mute`, and track metadata
-from the doubly-XML-encoded `LastChange` envelope and updates the
-matching instance's outputs. Result: external state changes (someone
-uses the Sonos app, AirPlay takes over, volume knob turned) reach KNX
-within ~1 second without polling.
+2. **(Recommended) Add the Admin block.** Drop a *Sonos Admin* block
+   onto the canvas. Download. Browse to `http://<hs-ip>:8080/` —
+   discover players, add players manually, browse Favorites, build
+   the preset library, define group presets, set defaults.
 
-Detail in [homeserver/logic-module/hsl3/README.md](homeserver/logic-module/hsl3/README.md).
+3. **Add a *Sonos Player* block per player.** Set `Host` to the
+   player's UUID (copy from the Admin UI by clicking the UUID on the
+   card). Wire control inputs to KNX group addresses. Wire status
+   outputs using the DPTs in [docs/KNX-MAPPING.md](docs/KNX-MAPPING.md).
 
-## Testing
+4. **Download to HomeServer.** Within one Tick interval (default 60 s)
+   the UPnP subscriptions register and status outputs populate.
+
+## Build the .hslz from source
+
+The committed archives in `dist/` are ready to import. To rebuild
+after editing a `.py` or `config.json` you need the Gira HSL3
+generator (closed-source Python 3.9 bytecode shipped with the Experte
+SDK):
 
 ```sh
-python3 homeserver/logic-module/hsl3/build/test_logic_modules.py
+GIRA_HSL3_GEN=/path/to/generator3.cpython-39.pyc \
+PYTHON39=/path/to/python3.9 \
+python3 scripts/build_hslz.py
 ```
 
-15 tests cover the pure helpers (SOAP fault extraction, NOTIFY
-parsing, URI normalisation, iso-8859-15 encoding) and the
+Without the generator the script still produces a spec-compliant
+archive shell with help + style.css; drop the `.hsl` into the archive
+on a machine that has the SDK.
+
+## Run the tests
+
+```sh
+python3 tests/test_logic_modules.py
+```
+
+78 tests covering: pure helpers (SOAP fault extraction, NOTIFY parsing,
+URI normalisation, play-mode composition, iso-8859-15 encoding), the
 `LogicModule` IO contract (string outputs are bytes, numeric outputs
-are float/int, offline path, error encoding). The tests use a
-`StubFramework` that mirrors the real `Hsl3Framework` surface, so no
-HomeServer is required.
+are float/int), Admin registry CRUD + persistence round-trip, group
+preset dispatch, container playback (queue-and-play), and the
+Admin-default fallback for Player tunables. No HomeServer needed —
+the `StubFramework` mirrors the real `Hsl3Framework` surface.
+
+## Documentation
+
+- [docs/KNX-MAPPING.md](docs/KNX-MAPPING.md) — recommended group-address
+  layout and DPTs.
+- [docs/FEATURE-PARITY.md](docs/FEATURE-PARITY.md) — exhaustive mapping
+  of every integration feature to where it lives in the code.
+- [docs/DESIGN-DECISIONS.md](docs/DESIGN-DECISIONS.md) — trade-offs and
+  rationale behind the implementation.
+- [docs/MANUAL-VERIFICATION.md](docs/MANUAL-VERIFICATION.md) —
+  hardware-in-the-loop commissioning checklist.
+- [docs/HOMESERVER-TILE.md](docs/HOMESERVER-TILE.md) — how to surface
+  the Admin URL on the HomeServer's start page as a tile.
+- [docs/sonos-wire-format.md](docs/sonos-wire-format.md) — UPnP NOTIFY
+  payload reference + raw SUBSCRIBE / RENEW / UNSUBSCRIBE format.
 
 ## SDK compliance
 
@@ -177,33 +156,13 @@ The modules conform to every rule in the GiraHSL skill:
   as `float`/`int`; never `str` or `None`.
 - `set_output` / `set_timer` / `set_store` only ever called in node
   context. Worker threads use `self.fw.run_in_context(callback, params)`.
-- `stores[].type` set on every store entry (generator crashes without
-  it).
-- No `|` or `"` in any label, name, category, or translation — verified
-  by the build script and tests.
+- `stores[].type` set on every store entry.
+- No `|` or `"` in any label, name, category, or translation —
+  verified by the build script's record-5000 field-count check.
 - HSLZ archives use the flat-root layout
-  (`<ID>_<name>.hsl`, `EN-log<ID>.html`, `DE-log<ID>.html`, `style.css`)
-  with the `href="../style.css"` → `href="style.css"` rewrite per SDK.
-- Help files use the SDK's required `auto_index_anchor_N_` anchors and
-  `table-in` / `table-out` / `table-logic-info` classes.
-
-## Documentation
-
-- [homeserver/logic-module/hsl3/README.md](homeserver/logic-module/hsl3/README.md)
-  — full input / output / parameter reference for both modules,
-  architecture, build flow, testing.
-- [homeserver/logic-module/hsl3/FEATURE-PARITY.md](homeserver/logic-module/hsl3/FEATURE-PARITY.md)
-  — exhaustive mapping of every integration feature to its HSL3 home.
-- [homeserver/logic-module/hsl3/DESIGN-DECISIONS.md](homeserver/logic-module/hsl3/DESIGN-DECISIONS.md)
-  — trade-offs and rationale behind the implementation.
-- [homeserver/logic-module/hsl3/MANUAL-VERIFICATION.md](homeserver/logic-module/hsl3/MANUAL-VERIFICATION.md)
-  — hardware commissioning checklist.
-- [homeserver/KNX-MAPPING.md](homeserver/KNX-MAPPING.md)
-  — recommended KNX group-address layout and DPTs.
-- [homeserver/logic-module/soap/](homeserver/logic-module/soap/)
-  — raw SOAP envelopes and NOTIFY format reference. The same
-  envelopes are embedded as string constants in
-  `hsl3_22000_sonos_player.py`.
+  (`<ID>_<name>.hsl`, `EN-log<ID>.html`, `DE-log<ID>.html`,
+  `style.css`) with the `href="../style.css"` → `href="style.css"`
+  rewrite per SDK.
 
 ## License
 

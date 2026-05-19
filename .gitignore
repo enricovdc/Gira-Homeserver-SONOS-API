@@ -6,9 +6,9 @@ __pycache__/
 # HSL3 build artifacts. The dist directory holds intermediate copies
 # of the .py and config.json that are regenerated on every build; only
 # the .hslz archives are kept in the repo as the canonical deliverable.
-homeserver/logic-module/hsl3/build/dist/*
-!homeserver/logic-module/hsl3/build/dist/
-!homeserver/logic-module/hsl3/build/dist/*.hslz
+dist/*
+!dist/
+!dist/*.hslz
 
 # Editor / OS
 .DS_Store

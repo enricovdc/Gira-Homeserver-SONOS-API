@@ -45,8 +45,8 @@ for — no separate HTTP layer is needed.
 | Function | HSL3 location | Notes |
 | --- | --- | --- |
 | Configure up to 8 stream URIs | LBS 22000 inputs `Station1Uri` … `Station8Uri` (E19–E26) | Each is a string input. Wire to constants or to a runtime data point. |
-| Direct trigger per station (one button per station) | KNX → small Experte logic block → write index to `StartRadio` | See `homeserver/KNX-MAPPING.md` "One button per station" |
-| Single value picks station (visualisation slider) | KNX/visualisation → `StartRadio` directly | See `homeserver/KNX-MAPPING.md` "One value for the station" |
+| Direct trigger per station (one button per station) | KNX → small Experte logic block → write index to `StartRadio` | See `docs/KNX-MAPPING.md` "One button per station" |
+| Single value picks station (visualisation slider) | KNX/visualisation → `StartRadio` directly | See `docs/KNX-MAPPING.md` "One value for the station" |
 | Firmware-2026 metadata fallback | `_action_start_radio` in `hsl3_22000_sonos_player.py` | x-rincon-mp3radio:// rewrite + retry on UPnP error codes 714/716/800 |
 | List configured stations | n/a in HSL3 — Experte shows the inputs of the block | The bridge's `/stations` endpoint mapped to the same source of truth |
 

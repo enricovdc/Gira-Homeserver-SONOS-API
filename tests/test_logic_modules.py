@@ -15,9 +15,9 @@ import threading
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[4]
-PLAYER_PY = ROOT / "homeserver" / "logic-module" / "hsl3" / "src_22000_sonos_player" / "hsl3_22000_sonos_player.py"
-ADMIN_PY = ROOT / "homeserver" / "logic-module" / "hsl3" / "src_22001_sonos_admin" / "hsl3_22001_sonos_admin.py"
+ROOT = Path(__file__).resolve().parents[1]
+PLAYER_PY = ROOT / "projects" / "sonos_player_hsl3" / "hsl3_22000_sonos_player.py"
+ADMIN_PY = ROOT / "projects" / "sonos_admin_hsl3" / "hsl3_22001_sonos_admin.py"
 
 
 def load_module(path: Path, mod_name: str):

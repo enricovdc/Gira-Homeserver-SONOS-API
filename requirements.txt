@@ -1,0 +1,5 @@
+# Runtime dependency for the HSL3 LogicModules. The Gira HomeServer
+# bundles `requests` in its HSL3 Python 3.9 environment, so nothing
+# needs installing on the HomeServer itself — this file pins the
+# version used for local testing and CI.
+requests>=2.28
