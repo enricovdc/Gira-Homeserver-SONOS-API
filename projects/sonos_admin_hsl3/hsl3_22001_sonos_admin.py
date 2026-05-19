@@ -96,11 +96,37 @@ _admin_instance_ref = {"instance": None}   # Wrapped in dict so swap is atomic.
 
 
 def get_player_defaults():
-    """Return a snapshot copy of the player tunable defaults — used by
-    LBS 22000 to fall back when its own PollInterval / SubTimeout /
-    HttpTimeout / CallbackBase inputs are left at the init value."""
+    """Return a snapshot copy of the project-wide player tunable
+    defaults. LBS 22000 + LBS 22002 layer per-player overrides on
+    top of these (see ``get_player_tunables``)."""
     with _registry_lock:
         return dict(_player_defaults)
+
+
+def get_player_tunables(spec):
+    """Effective tunables for the player identified by ``spec``
+    (IP / MAC / UUID / name). Per-player overrides stored on the
+    player record win; missing or 0-valued overrides fall through
+    to the project-wide defaults. Always returns a complete dict —
+    never raises. The Player and Sound Enhancement LBS read their
+    PollInterval / SubTimeout / HttpTimeout / CallbackBase from
+    here so the integrator doesn't have to wire those inputs."""
+    out = dict(_player_defaults)
+    rec = get_player_record(spec) or {}
+    # Numeric overrides — 0 / negative / unparseable means "no
+    # override", fall through to the project default.
+    for key in ("pollInterval", "subTimeout", "httpTimeout"):
+        try:
+            v = int(rec.get(key) or 0)
+        except (TypeError, ValueError):
+            v = 0
+        if v > 0:
+            out[key] = v
+    # Callback URL — empty string also means "no override".
+    cb = rec.get("callbackBase")
+    if isinstance(cb, str) and cb.strip():
+        out["callbackBase"] = cb.strip().rstrip("/")
+    return out
 
 
 def _norm_mac(mac):
@@ -856,6 +882,12 @@ code { background: #f5f5f5; padding: 1px 6px; border: 1px solid #e8e8e8;
                                margin-bottom: 2px; }
 .player-card .pc-field input { width: 100%; }
 .player-card .pc-actions { display: flex; gap: 4px; align-items: end; }
+.player-card .pc-tunables { margin-top: 8px; }
+.player-card .pc-tunables summary { cursor: pointer; color: #606060;
+  font-size: 11px; user-select: none; padding: 4px 0; }
+.player-card .pc-tunables summary:hover { color: #202020; }
+.player-card .pc-tunables[open] summary { color: #202020; }
+.player-card .pc-tunables .pc-grid { margin-top: 6px; }
 .player-card .pc-meta { margin-top: 6px; font-size: 11px; color: #808080;
                         display: flex; gap: 12px; flex-wrap: wrap; }
 .player-card .pc-meta .pc-model { color: #505050; }
@@ -1184,6 +1216,35 @@ async function refreshPlayers() {
       '<div class="pc-meta">' +
         (p.model ? '<span class="pc-model">' + esc(p.model) + '</span>' : '') +
       '</div>' +
+      // Per-player tunable overrides. Empty fields = use the project
+      // default from the Player Defaults section. The placeholder
+      // shows what each default currently is so the integrator knows
+      // what they're overriding.
+      '<details class="pc-tunables">' +
+        '<summary>Advanced overrides</summary>' +
+        '<div class="pc-grid">' +
+          '<div class="pc-field">' +
+            '<label>Status poll (s)</label>' +
+            '<input type="number" min="10" data-edit="' + esc(p.id) + '" data-field="pollInterval" ' +
+                   'value="' + esc(p.pollInterval || '') + '" placeholder="default">' +
+          '</div>' +
+          '<div class="pc-field">' +
+            '<label>UPnP sub (s)</label>' +
+            '<input type="number" min="60" data-edit="' + esc(p.id) + '" data-field="subTimeout" ' +
+                   'value="' + esc(p.subTimeout || '') + '" placeholder="default">' +
+          '</div>' +
+          '<div class="pc-field">' +
+            '<label>HTTP timeout (s)</label>' +
+            '<input type="number" min="2"  data-edit="' + esc(p.id) + '" data-field="httpTimeout" ' +
+                   'value="' + esc(p.httpTimeout || '') + '" placeholder="default">' +
+          '</div>' +
+          '<div class="pc-field" style="grid-column:1 / -1">' +
+            '<label>Callback base URL</label>' +
+            '<input type="text" data-edit="' + esc(p.id) + '" data-field="callbackBase" ' +
+                   'value="' + esc(p.callbackBase || '') + '" placeholder="default (auto from LAN IP)">' +
+          '</div>' +
+        '</div>' +
+      '</details>' +
       '<div class="pc-favs" id="favs-' + esc(p.id) + '"></div>';
     list.appendChild(card);
   }
@@ -2479,6 +2540,28 @@ class LogicModule:
                 if body["mac"] and not v:
                     raise ValueError("invalid MAC")
                 rec["mac"] = v
+            # Per-player tunable overrides. Empty / 0 / negative
+            # clears the override (back to the project default). The
+            # validation floors mirror the Player module's clamps so
+            # a bad value entered in the UI can't sneak past.
+            for key, floor in (("pollInterval", 10),
+                               ("subTimeout",   60),
+                               ("httpTimeout",  2)):
+                if key in body:
+                    try:
+                        v = int(body[key] or 0)
+                    except (TypeError, ValueError):
+                        raise ValueError("{} must be a number".format(key))
+                    if v <= 0:
+                        rec.pop(key, None)
+                    else:
+                        rec[key] = max(floor, v)
+            if "callbackBase" in body:
+                cb = (body["callbackBase"] or "").strip().rstrip("/")
+                if cb:
+                    rec["callbackBase"] = cb
+                else:
+                    rec.pop("callbackBase", None)
         self._sync_async()
         return {"ok": True}
 

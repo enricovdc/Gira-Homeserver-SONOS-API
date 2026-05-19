@@ -43,7 +43,7 @@
   <div class="alert-box ibox-hint">
     <div class="box-title">Hinweis</div>
     <div class="box-text"><div class="descr">
-      Fuegen Sie eine Instanz pro Sonos Player hinzu. Jede Instanz benoetigt einen eindeutigen Host. Alle Instanzen teilen sich einen NOTIFY Listener Thread.
+      Fuegen Sie eine Instanz pro Sonos Player hinzu. Jede Instanz benoetigt einen eindeutigen Host. Alle Instanzen teilen sich einen NOTIFY Listener Thread. Der Baustein hat keine PollInterval / SubTimeout / HttpTimeout / CallbackBase Eingaenge mehr &mdash; diese werden in der Sonos Admin-Webseite konfiguriert: projektweit in "Player Defaults" oder pro Player im "Advanced overrides"-Bereich der Player-Karte.
     </div></div>
   </div>
 </div>
@@ -77,10 +77,6 @@
     <tr><td class="io-nr input center">E23</td><td class="io-name">PresetNextPrev</td><td class="io-init center">0</td><td class="io-descr">Durch die Admin-Preset-Bibliothek blaettern. 1 = naechstes Preset (alphabetisch), 0 = vorheriges. Wickelt an beiden Enden um. NO_PRESETS erscheint auf LastError wenn die Bibliothek leer ist.</td></tr>
     <tr><td class="io-nr input center">E24</td><td class="io-name">PlaySound</td><td class="io-init center">0</td><td class="io-descr">Notification-Clip aus der Admin-Sound-Bibliothek per Index (1..N) abspielen — entspricht Home Assistants Sonos <code>announce: true</code>. Auf moderner S2-Firmware verwendet der Player den nativen <code>AudioClip.LoadAudioClip</code> Service: Sonos blendet die Musik aus, spielt den Clip und blendet sie automatisch wieder ein. Aeltere S1-Hardware kennt AudioClip nicht; der Player faellt dann auf Snapshot/Restore zurueck (Quelle, Position, Lautstaerke, Stummschaltung sichern, abspielen, auf STOPPED warten, wiederherstellen). SOUND_NOT_FOUND auf LastError wenn der Index leer oder ausserhalb des Bereichs liegt.</td></tr>
     <tr><td class="io-nr input center">E25</td><td class="io-name">VolStep</td><td class="io-init center">2</td><td class="io-descr">Schrittweite fuer VolUp / VolDown / VolUpDown.</td></tr>
-    <tr><td class="io-nr input center">E26</td><td class="io-name">PollInterval</td><td class="io-init center">60</td><td class="io-descr">Status-Abfrageintervall in Sekunden. Bei 0 wird der Wert aus der Admin-Webseite (Player Defaults) verwendet.</td></tr>
-    <tr><td class="io-nr input center">E27</td><td class="io-name">SubTimeout</td><td class="io-init center">1800</td><td class="io-descr">UPnP Abonnement Timeout. Bei 0 wird der Wert aus der Admin-Webseite verwendet.</td></tr>
-    <tr><td class="io-nr input center">E28</td><td class="io-name">HttpTimeout</td><td class="io-init center">5</td><td class="io-descr">HTTP Anfrage Timeout in Sekunden. Bei 0 wird der Wert aus der Admin-Webseite verwendet.</td></tr>
-    <tr><td class="io-nr input center">E29</td><td class="io-name">CallbackBase</td><td class="io-init string center"></td><td class="io-descr">Callback Basis URL. Leer = Admin-Vorgabe verwenden, sonst Auto-Erkennung anhand der HomeServer-LAN-IP.</td></tr>
   </table>
 </div>
 

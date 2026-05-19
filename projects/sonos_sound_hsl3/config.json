@@ -22,9 +22,7 @@
       { "type": "number", "identifier": "SetSurroundLevel","init_value": 0, "label": "Set Surround Level -15 to 15 soundbar" },
       { "type": "number", "identifier": "SetSubEnable", "init_value": 0,   "label": "Set Sub Enable" },
       { "type": "number", "identifier": "SetSubGain",   "init_value": 0,   "label": "Set Sub Gain -15 to 15" },
-      { "type": "number", "identifier": "SetTrueplay",  "init_value": 0,   "label": "Set Trueplay Enabled" },
-      { "type": "number", "identifier": "PollInterval", "init_value": 0,   "label": "Status Poll Interval seconds 0 uses Admin default" },
-      { "type": "number", "identifier": "HttpTimeout",  "init_value": 0,   "label": "HTTP Timeout seconds 0 uses Admin default" }
+      { "type": "number", "identifier": "SetTrueplay",  "init_value": 0,   "label": "Set Trueplay Enabled" }
     ],
     "outputs": [
       { "type": "number", "identifier": "Online",        "init_value": 0,  "label": "Online" },
@@ -76,9 +74,7 @@
           { "label": "Surround-Pegel -15 bis 15 Soundbar" },
           { "label": "Subwoofer aktivieren" },
           { "label": "Subwoofer-Pegel -15 bis 15" },
-          { "label": "Trueplay aktivieren" },
-          { "label": "Status-Abfrageintervall Sekunden 0 nutzt Admin-Vorgabe" },
-          { "label": "HTTP-Timeout Sekunden 0 nutzt Admin-Vorgabe" }
+          { "label": "Trueplay aktivieren" }
         ],
         "translation_outputs": [
           { "label": "Online" },

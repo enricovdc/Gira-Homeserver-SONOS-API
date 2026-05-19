@@ -71,7 +71,7 @@ firmware **4.13+** (HSL3 / Python 3.9 logic-module SDK).
   play / restore cycle. Library starts empty; drop in any MP3 / WAV /
   AAC / OGG / FLAC up to 2 MB.
 - **Optional sound-tuning companion (LBS 22002).** Per-player,
-  additive — leave it off when you don't need the extras. 18 inputs
+  additive — leave it off when you don't need the extras. 16 inputs
   / 20 outputs covering Bass, Treble, Loudness, soundbar Night Mode
   + Dialog Mode, Crossfade, Sleep Timer, soundbar TV input,
   status LED, battery + charging (Move/Roam), proportional group
@@ -79,7 +79,12 @@ firmware **4.13+** (HSL3 / Python 3.9 logic-module SDK).
   hardware-specific knob (soundbar EQ, portable battery, coordinator
   group volume) fails gracefully on the wrong hardware with a tagged
   LastError so the integrator can spot misconfigured wiring instantly.
-- **117 unit tests** with a stubbed `Hsl3Framework`, runnable in CI.
+- **No tunables on the Player blocks.** `PollInterval`, `SubTimeout`,
+  `HttpTimeout`, and `CallbackBase` live entirely in the Admin web UI:
+  project-wide *Player Defaults* plus optional per-player *Advanced
+  overrides* on each player card. One place to tune, no input wires
+  to maintain.
+- **118 unit tests** with a stubbed `Hsl3Framework`, runnable in CI.
 
 ## Repository layout
 
@@ -101,7 +106,7 @@ firmware **4.13+** (HSL3 / Python 3.9 logic-module SDK).
 ├── scripts/
 │   └── build_hslz.py            packager → dist/*.hslz
 ├── tests/
-│   └── test_logic_modules.py    117 unit tests with a stubbed framework
+│   └── test_logic_modules.py    118 unit tests with a stubbed framework
 └── dist/
     ├── 22000_sonos_player.hslz  deployable archive (committed)
     ├── 22001_sonos_admin.hslz
@@ -150,7 +155,7 @@ on a machine that has the SDK.
 python3 tests/test_logic_modules.py
 ```
 
-117 tests covering: pure helpers (SOAP fault extraction, NOTIFY parsing,
+118 tests covering: pure helpers (SOAP fault extraction, NOTIFY parsing,
 URI normalisation, play-mode composition, transport-actions parsing,
 iso-8859-15 encoding), the
 `LogicModule` IO contract (string outputs are bytes, numeric outputs

@@ -2,8 +2,8 @@
 
 Every user-facing function the integration exposes, and where it lives
 in the HSL3 modules. Refreshed against the v1.0.0 module shipped in
-this repo: **LBS 22000 Sonos Player** with 29 inputs / 28 outputs and
-**LBS 22002 Sonos Sound Enhancement** (optional companion) with 18 inputs / 20 outputs and no persistent state. **LBS 22001 Sonos Admin** with 7 inputs / 8 outputs + 6 retentive
+this repo: **LBS 22000 Sonos Player** with 25 inputs / 28 outputs and
+**LBS 22002 Sonos Sound Enhancement** (optional companion) with 16 inputs / 20 outputs and no persistent state. **LBS 22001 Sonos Admin** with 7 inputs / 8 outputs + 6 retentive
 stores.
 
 ## Sonos control surface (LBS 22000 inputs)
@@ -73,10 +73,16 @@ stores.
 | --- | --- | --- | --- |
 | Player host | `Host` (E1) | "" (required) | UUID (preferred) / MAC / name / IPv4. Admin resolves the first three to a current IP. |
 | Volume step | `VolStep` (E25) | 2 | Applied by `VolUp` / `VolDown` / `VolUpDown` |
-| Status poll interval | `PollInterval` (E26) | 60 s | Leave at 0 to use the Admin's Player Defaults value |
-| UPnP subscription timeout | `SubTimeout` (E27) | 1800 s | Leave at 0 to use the Admin's Player Defaults value |
-| HTTP request timeout | `HttpTimeout` (E28) | 5 s | Leave at 0 to use the Admin's Player Defaults value |
-| Callback base URL | `CallbackBase` (E29) | "" | Empty → Admin default → auto-detected `http://<lan-ip>:<listener-port>` |
+
+`PollInterval`, `SubTimeout`, `HttpTimeout`, and `CallbackBase` are
+**no longer inputs on the Player block**. They live in the Admin
+LBS 22001: project-wide values in the *Player Defaults* section,
+plus optional per-player overrides in each player card's *Advanced
+overrides* collapsible. The Player module resolves the effective
+value via `get_player_tunables(spec)` on every `on_calc` — override
+on the player record wins; missing fields fall through to the
+project default; project default falls through to hard-coded
+fallbacks (60 s / 1800 s / 5 s / auto-detected LAN IP).
 
 ## Presets (Admin library, no per-player slots)
 
@@ -133,9 +139,9 @@ The Host input takes the same UUID/MAC/name/IP as the matching LBS
 | Reachability | n/a | `Online` (A1) | 1 when at least one SOAP call in the latest Tick succeeded. |
 | Error | n/a | `LastError` (A20) | `SET_BASS_FAILED` / `NIGHTMODE_UNSUPPORTED` / `DIALOGMODE_UNSUPPORTED` / `SURROUND_UNSUPPORTED` / `SUB_UNSUPPORTED` / `GROUP_NOT_COORDINATOR` / `TV_NO_UUID` / `NO_HT_STREAM` / `TRUEPLAY_UNAVAILABLE` / `UNREACHABLE` / `HTTP_<n>` / `EXCEPTION: …`. |
 
-Tunable inputs `PollInterval` (E17) and `HttpTimeout` (E18) follow the
-same fall-through pattern as on LBS 22000 — leave at 0 to use the
-Admin's Player Defaults values.
+Like LBS 22000, this block has **no tunable inputs**. `PollInterval`
+and `HttpTimeout` come from the Admin's Player Defaults + per-player
+overrides via the same `get_player_tunables(spec)` lookup.
 
 ## Group presets
 

@@ -37,7 +37,7 @@
   <div class="alert-box ibox-hint">
     <div class="box-title">Hinweis</div>
     <div class="box-text"><div class="descr">
-      Nur Polling, keine UPnP-Abonnements. Diese Einstellungen aendern sich selten; Aktualisierung im gleichen Tick-Takt wie der Player (Vorgabe 60 s) reicht. Soundbar-EQs (Nachtmodus, Sprachmodus) scheitern sauber auf Nicht-Soundbar-Hardware mit NIGHTMODE_UNSUPPORTED / DIALOGMODE_UNSUPPORTED auf LastError.
+      Nur Polling, keine UPnP-Abonnements. Polling-Intervall und HTTP-Timeout kommen aus der Sonos Admin-Webseite (projektweite Player Defaults oder die per-Player "Advanced overrides") &mdash; keine Tunable-Eingaenge an diesem Baustein. Soundbar-EQs (Nachtmodus, Sprachmodus) scheitern sauber auf Nicht-Soundbar-Hardware mit NIGHTMODE_UNSUPPORTED / DIALOGMODE_UNSUPPORTED auf LastError.
     </div></div>
   </div>
 </div>
@@ -62,8 +62,6 @@
     <tr><td class="io-nr input center">E14</td><td class="io-name">SetSubEnable</td><td class="io-init center">0</td><td class="io-descr">Subwoofer ein/aus. Nicht-unterstuetzt: SUB_UNSUPPORTED.</td></tr>
     <tr><td class="io-nr input center">E15</td><td class="io-name">SetSubGain</td><td class="io-init center">0</td><td class="io-descr">Subwoofer-Pegel -15 bis +15.</td></tr>
     <tr><td class="io-nr input center">E16</td><td class="io-name">SetTrueplay</td><td class="io-init center">0</td><td class="io-descr">Trueplay-Kalibrierung anwenden ein/aus. Neue Kalibrierung nur per Sonos-iOS-App. TRUEPLAY_UNAVAILABLE wenn keine Kalibrierung vorhanden.</td></tr>
-    <tr><td class="io-nr input center">E17</td><td class="io-name">PollInterval</td><td class="io-init center">0</td><td class="io-descr">Status-Abfrageintervall in Sekunden. Bei 0 wird der Wert aus der Admin-Webseite (Player Defaults) verwendet.</td></tr>
-    <tr><td class="io-nr input center">E18</td><td class="io-name">HttpTimeout</td><td class="io-init center">0</td><td class="io-descr">HTTP-Timeout in Sekunden. Bei 0 wird der Wert aus der Admin-Webseite verwendet.</td></tr>
   </table>
 </div>
 

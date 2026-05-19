@@ -46,7 +46,7 @@
   <div class="alert-box ibox-hint">
     <div class="box-title">Note</div>
     <div class="box-text"><div class="descr">
-      Add one instance per Sonos player. Each instance must have a unique Host. All instances share one NOTIFY listener thread.
+      Add one instance per Sonos player. Each instance must have a unique Host. All instances share one NOTIFY listener thread. The block has no PollInterval / SubTimeout / HttpTimeout / CallbackBase inputs &mdash; configure those in the Sonos Admin web UI&apos;s Player Defaults section (project-wide) or per-player via the Advanced overrides panel on each player&apos;s card.
     </div></div>
   </div>
 </div>
@@ -83,10 +83,6 @@
     <tr><td class="io-nr input center">E23</td><td class="io-name">PresetNextPrev</td><td class="io-init center">0</td><td class="io-descr">Step through the Sonos Admin preset library. Writing 1 starts the next preset (alphabetical), writing 0 starts the previous one. Wraps at both ends. Surfaces NO_PRESETS on LastError when the library is empty.</td></tr>
     <tr><td class="io-nr input center">E24</td><td class="io-name">PlaySound</td><td class="io-init center">0</td><td class="io-descr">Play a notification clip from the Admin Sounds library by alphabetical index (1..N) — equivalent to Home Assistant&apos;s Sonos <code>announce: true</code>. On modern S2 firmware the Player uses the native <code>AudioClip.LoadAudioClip</code> service so Sonos ducks the current music, plays the clip, and resumes automatically. Older S1 hardware doesn&apos;t expose AudioClip; the Player then falls back to snapshot/restore (capture source + position + volume + mute, play, poll for STOPPED, restore). SOUND_NOT_FOUND on LastError when the index is empty or out of range.</td></tr>
     <tr><td class="io-nr input center">E25</td><td class="io-name">VolStep</td><td class="io-init center">2</td><td class="io-descr">Step size for VolUp / VolDown / VolUpDown.</td></tr>
-    <tr><td class="io-nr input center">E26</td><td class="io-name">PollInterval</td><td class="io-init center">60</td><td class="io-descr">Status poll interval in seconds. Leave at 0 to use the Admin web UI&apos;s Player Defaults value.</td></tr>
-    <tr><td class="io-nr input center">E27</td><td class="io-name">SubTimeout</td><td class="io-init center">1800</td><td class="io-descr">UPnP subscription timeout granted to the player. Leave at 0 to use the Admin web UI&apos;s Player Defaults value.</td></tr>
-    <tr><td class="io-nr input center">E28</td><td class="io-name">HttpTimeout</td><td class="io-init center">5</td><td class="io-descr">HTTP request timeout in seconds. Leave at 0 to use the Admin web UI&apos;s Player Defaults value.</td></tr>
-    <tr><td class="io-nr input center">E29</td><td class="io-name">CallbackBase</td><td class="io-init string center"></td><td class="io-descr">Callback base URL for UPnP. Leave empty to use the Admin web UI&apos;s Player Defaults value, or fall through to auto-detection from the HomeServer&apos;s LAN IP.</td></tr>
   </table>
 </div>
 

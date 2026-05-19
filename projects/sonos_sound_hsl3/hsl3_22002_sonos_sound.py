@@ -336,9 +336,28 @@ def _admin_player_record(spec):
     return None
 
 
+def _admin_player_tunables(spec):
+    """Effective per-player tunables — same lookup pattern LBS 22000
+    uses. Returns ``{}`` when Admin isn't loaded; `_reload_config`
+    then uses hard-coded floors."""
+    for mod_name, mod in list(sys.modules.items()):
+        if mod is None:
+            continue
+        if "sonos_admin" in mod_name or "hsl3_22001" in mod_name:
+            fn = getattr(mod, "get_player_tunables", None)
+            if callable(fn):
+                try:
+                    d = fn(spec)
+                    if isinstance(d, dict):
+                        return d
+                except Exception:
+                    pass
+    return {}
+
+
 def _admin_player_defaults():
-    """Fall-through defaults for PollInterval / HttpTimeout when
-    the integrator left this block's inputs at 0."""
+    """Pull the Admin's project-wide defaults — kept for tests that
+    exercise the global-fallback layer directly."""
     for mod_name, mod in list(sys.modules.items()):
         if mod is None:
             continue
@@ -479,11 +498,12 @@ class LogicModule:
         self._host_spec = to_str(inputs["Host"].value).strip()
         resolved = resolve_host_spec(self._host_spec)
         self._host = resolved or (self._host_spec if _is_ip_literal(self._host_spec) else "")
-        defaults = _admin_player_defaults()
-        poll_in = int(inputs["PollInterval"].value or 0)
-        http_in = int(inputs["HttpTimeout"].value or 0)
-        self._poll_interval_s = max(10, poll_in or int(defaults.get("pollInterval") or 60))
-        self._http_timeout_s = max(2,  http_in or int(defaults.get("httpTimeout")  or 5))
+        # Tunables come entirely from the Admin (project default
+        # plus optional per-player override). No tunable inputs on
+        # this block — same model as LBS 22000.
+        tunables = _admin_player_tunables(self._host_spec)
+        self._poll_interval_s = max(10, int(tunables.get("pollInterval") or 60))
+        self._http_timeout_s  = max(2,  int(tunables.get("httpTimeout")  or 5))
 
     # ----- Worker thread plumbing ------------------------------------------
 

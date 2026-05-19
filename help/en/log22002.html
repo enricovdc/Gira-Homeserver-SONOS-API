@@ -40,7 +40,7 @@
   <div class="alert-box ibox-hint">
     <div class="box-title">Note</div>
     <div class="box-text"><div class="descr">
-      Polling-only, no UPnP subscriptions. These settings change rarely, so refreshing on the same Tick cadence as the Player (default 60 s) is enough. Soundbar EQ controls (Night Mode, Dialog Mode) fail gracefully on non-soundbar hardware with NIGHTMODE_UNSUPPORTED / DIALOGMODE_UNSUPPORTED on LastError.
+      Polling-only, no UPnP subscriptions. Poll interval and HTTP timeout come from the Sonos Admin web UI (project-wide Player Defaults or the per-player Advanced overrides) &mdash; no tunable inputs on this block either. Soundbar EQ controls (Night Mode, Dialog Mode) fail gracefully on non-soundbar hardware with NIGHTMODE_UNSUPPORTED / DIALOGMODE_UNSUPPORTED on LastError.
     </div></div>
   </div>
 </div>
@@ -68,8 +68,6 @@
     <tr><td class="io-nr input center">E14</td><td class="io-name">SetSubEnable</td><td class="io-init center">0</td><td class="io-descr">Enable the connected Sub. 0/1. Non-supporting hardware surfaces SUB_UNSUPPORTED.</td></tr>
     <tr><td class="io-nr input center">E15</td><td class="io-name">SetSubGain</td><td class="io-init center">0</td><td class="io-descr">Sub gain -15 to +15. Useful for nightly "low bass" scene.</td></tr>
     <tr><td class="io-nr input center">E16</td><td class="io-name">SetTrueplay</td><td class="io-init center">0</td><td class="io-descr">Enable / disable applying the stored Trueplay room calibration. 0/1. Running a new calibration is iOS-only — this just toggles whether the profile is applied. TRUEPLAY_UNAVAILABLE on LastError if no calibration has been performed yet.</td></tr>
-    <tr><td class="io-nr input center">E17</td><td class="io-name">PollInterval</td><td class="io-init center">0</td><td class="io-descr">Status poll interval in seconds. Leave at 0 to use the Admin web UI&apos;s Player Defaults value (default 60 s).</td></tr>
-    <tr><td class="io-nr input center">E18</td><td class="io-name">HttpTimeout</td><td class="io-init center">0</td><td class="io-descr">HTTP request timeout in seconds. Leave at 0 to use the Admin web UI&apos;s Player Defaults value (default 5 s).</td></tr>
   </table>
 </div>
 

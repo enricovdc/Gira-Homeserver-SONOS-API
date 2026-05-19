@@ -2,7 +2,7 @@
 
 Run through this list against real Sonos hardware when commissioning
 the HSL3 modules, after a Sonos firmware update, or after network
-changes. The 117 unit tests under `tests/test_logic_modules.py` cover
+changes. The 118 unit tests under `tests/test_logic_modules.py` cover
 the pure logic against a stubbed framework; this checklist is for
 hardware-in-the-loop validation.
 
@@ -104,6 +104,19 @@ Trigger the corresponding KNX address (or simulate the input in Experte):
       The master keeps playing.
 - [ ] Form a group with an unknown player id (edit the Admin record
       out-of-band, then trigger the preset) → `LastError = GROUP_PARTIAL: <n>`.
+
+## Player tunables (Admin-managed)
+
+- [ ] In the Admin web UI's *Player Defaults* section, change
+      `Status poll interval` to e.g. 30 s. Within ~60 s every Player
+      block honours the new poll cadence (visible on the debug page's
+      "Status polls" counter, which now increments roughly every
+      30 s).
+- [ ] Expand *Advanced overrides* on a single player card. Set
+      `Status poll (s)` = 10. That speaker's Player block now polls
+      every 10 s while the rest stay at the project default.
+- [ ] Clear the override (empty input). The player reverts to the
+      project default within one on_calc cycle.
 
 ## Sound Enhancement companion (LBS 22002)
 

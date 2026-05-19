@@ -269,24 +269,24 @@ This is preferred over wiring per-player KNX addresses in parallel
 because the dispatch happens through Sonos's native zone-group
 mechanism (slaves auto-mirror the master's audio).
 
-## Configuration inputs (constant or Admin-default)
-
-These are wired to *constant values* or to *internal data points* in
-Experte, not to KNX group addresses. Setting them to 0/empty makes the
-Player block read the Admin web UI's *Player Defaults* values.
+## Configuration inputs (constant)
 
 | Input | Default | Notes |
 | --- | --- | --- |
-| `Host`         | (required) | UUID preferred (`RINCON_xxx`). Falls back to MAC, name, or IPv4 — resolved via the Admin registry. |
-| `VolStep`      | 2          | Step for `VolUp` / `VolDown` |
-| `PollInterval` | 60 s       | 0 → use Admin default |
-| `SubTimeout`   | 1800 s     | 0 → use Admin default |
-| `HttpTimeout`  | 5 s        | 0 → use Admin default |
-| `CallbackBase` | ""         | Empty → use Admin default → auto-detected `http://<lan-ip>:<listener-port>` |
+| `Host`    | (required) | UUID preferred (`RINCON_xxx`). Falls back to MAC, name, or IPv4 — resolved via the Admin registry. |
+| `VolStep` | 2          | Step for `VolUp` / `VolDown` / `VolUpDown` |
 
-A common pattern is to bind the tunables to HS Experte data points
-the integrator edits in the visualisation, so tuning happens at
-runtime without re-opening Experte.
+**Status poll interval, UPnP subscription timeout, HTTP timeout, and
+the callback base URL are not inputs on the Player block.** They live
+in the Sonos Admin web UI:
+
+- **Project-wide defaults** in the *Player Defaults* section
+  (`http://<hs-ip>:8080/`). These apply to every Player + Sound
+  Enhancement block unless overridden.
+- **Per-player overrides** in each player card's *Advanced overrides*
+  collapsible. Leave a field empty to fall back to the project
+  default. Useful for e.g. shortening the poll interval on a single
+  speaker that needs faster feedback.
 
 ## Verifying the wiring
 

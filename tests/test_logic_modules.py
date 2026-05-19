@@ -168,10 +168,6 @@ def make_player_inputs(host="10.0.0.1", **overrides):
         "PresetNextPrev": StubSlot(0),
         "PlaySound":    StubSlot(0),
         "VolStep":      StubSlot(2),
-        "PollInterval": StubSlot(60),
-        "SubTimeout":   StubSlot(1800),
-        "HttpTimeout":  StubSlot(5),
-        "CallbackBase": StubSlot(""),
     }
     base.update({k: (v if isinstance(v, StubSlot) else StubSlot(v))
                  for k, v in overrides.items()})
@@ -1961,40 +1957,10 @@ class TestPlayerStationFromAdmin(unittest.TestCase):
         self.assertEqual(called, [])
         self.assertEqual(fw.outputs["LastError"], b"PLAYLIST_NO_UUID")
 
-    def test_player_falls_back_to_admin_defaults_when_inputs_zero(self):
-        """When the Player block's tunable inputs are at init (0 / empty),
-        _reload_config picks them up from the Admin's _player_defaults
-        dict via the get_player_defaults() module-level helper."""
-        # Configure Admin-side defaults. The player helper walks
-        # sys.modules and returns the first matching admin module, so to
-        # keep the test hermetic we update every loaded admin module.
-        for mod_name, mod in list(sys.modules.items()):
-            if mod is None:
-                continue
-            if "sonos_admin" in mod_name and hasattr(mod, "_player_defaults"):
-                with mod._registry_lock:
-                    mod._player_defaults.update({
-                        "pollInterval": 25,
-                        "subTimeout":   900,
-                        "httpTimeout":  7,
-                        "callbackBase": "http://hs:8082",
-                    })
-        fw = StubFramework()
-        lm = self.player.LogicModule(fw)
-        lm.debug = fw.create_debug_section()
-        inputs = make_player_inputs(
-            host="10.0.0.1",
-            PollInterval=0, SubTimeout=0, HttpTimeout=0, CallbackBase="",
-        )
-        lm._reload_config(inputs)
-        self.assertEqual(lm._poll_interval_s, 25)
-        self.assertEqual(lm._sub_timeout_s, 900)
-        self.assertEqual(lm._http_timeout_s, 7)
-        self.assertEqual(lm._callback_base, "http://hs:8082")
-
-    def test_player_input_overrides_admin_default(self):
-        """When the Player input is set (non-zero / non-empty), it wins
-        over the Admin default — local override always beats global."""
+    def test_player_uses_admin_global_defaults_when_no_override(self):
+        """Tunables come entirely from the Admin now. With no
+        per-player override on the player record, _reload_config
+        reads the project-wide defaults via get_player_tunables."""
         for mod_name, mod in list(sys.modules.items()):
             if mod is None:
                 continue
@@ -2002,21 +1968,88 @@ class TestPlayerStationFromAdmin(unittest.TestCase):
                 with mod._registry_lock:
                     mod._player_defaults.update({
                         "pollInterval": 25, "subTimeout": 900,
-                        "httpTimeout": 7, "callbackBase": "http://hs:8082",
+                        "httpTimeout":  7,  "callbackBase": "http://hs:8082",
                     })
+                    mod._players.clear()  # no per-player record at all
         fw = StubFramework()
         lm = self.player.LogicModule(fw)
         lm.debug = fw.create_debug_section()
-        inputs = make_player_inputs(
-            host="10.0.0.1",
-            PollInterval=120, SubTimeout=3600, HttpTimeout=10,
-            CallbackBase="http://override:9000",
-        )
-        lm._reload_config(inputs)
-        self.assertEqual(lm._poll_interval_s, 120)
-        self.assertEqual(lm._sub_timeout_s, 3600)
-        self.assertEqual(lm._http_timeout_s, 10)
+        lm._reload_config(make_player_inputs(host="10.0.0.1"))
+        self.assertEqual(lm._poll_interval_s, 25)
+        self.assertEqual(lm._sub_timeout_s, 900)
+        self.assertEqual(lm._http_timeout_s, 7)
+        self.assertEqual(lm._callback_base, "http://hs:8082")
+
+    def test_player_per_player_override_beats_global_default(self):
+        """When the player record carries pollInterval / subTimeout /
+        httpTimeout / callbackBase fields, those win over the
+        project-wide defaults — same speaker tunes itself."""
+        for mod_name, mod in list(sys.modules.items()):
+            if mod is None:
+                continue
+            if "sonos_admin" in mod_name and hasattr(mod, "_player_defaults"):
+                with mod._registry_lock:
+                    mod._player_defaults.update({
+                        "pollInterval": 60, "subTimeout": 1800,
+                        "httpTimeout":  5,  "callbackBase": "http://global:8081",
+                    })
+                    mod._players.clear()
+                    # The Host input matches this player's IP (10.0.0.1).
+                    mod._players["lr"] = {
+                        "id": "lr", "name": "Living Room",
+                        "zoneName": "Living Room",
+                        "ip": "10.0.0.1", "mac": "", "uuid": "RINCON_LR",
+                        "model": "", "source": "ssdp",
+                        "pollInterval": 30,
+                        "subTimeout":   600,
+                        "httpTimeout":  4,
+                        "callbackBase": "http://override:9000",
+                    }
+        fw = StubFramework()
+        lm = self.player.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._reload_config(make_player_inputs(host="10.0.0.1"))
+        self.assertEqual(lm._poll_interval_s, 30)
+        self.assertEqual(lm._sub_timeout_s, 600)
+        self.assertEqual(lm._http_timeout_s, 4)
         self.assertEqual(lm._callback_base, "http://override:9000")
+
+    def test_admin_api_update_player_stores_overrides(self):
+        """api_update_player accepts the four override fields and
+        stores them on the player record. Sending 0 / empty clears
+        the override (back to project default)."""
+        fw = StubFramework()
+        lm = self.admin.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        with self.admin._registry_lock:
+            self.admin._players["lr"] = {
+                "id": "lr", "name": "lr", "zoneName": "Living Room",
+                "ip": "10.0.0.50", "mac": "", "uuid": "RINCON_LR",
+                "model": "", "source": "manual",
+            }
+        lm.api_update_player("lr", {
+            "pollInterval": 30, "subTimeout": 600,
+            "httpTimeout":  4,  "callbackBase": "http://override:9000",
+        })
+        with self.admin._registry_lock:
+            rec = self.admin._players["lr"]
+            self.assertEqual(rec["pollInterval"], 30)
+            self.assertEqual(rec["subTimeout"],   600)
+            self.assertEqual(rec["httpTimeout"],  4)
+            self.assertEqual(rec["callbackBase"], "http://override:9000")
+        # get_player_tunables layers them on top of the project defaults.
+        t = self.admin.get_player_tunables("RINCON_LR")
+        self.assertEqual(t["pollInterval"], 30)
+        self.assertEqual(t["callbackBase"], "http://override:9000")
+        # Clear by sending 0 / empty
+        lm.api_update_player("lr", {
+            "pollInterval": 0, "subTimeout": 0,
+            "httpTimeout":  0, "callbackBase": "",
+        })
+        with self.admin._registry_lock:
+            rec = self.admin._players["lr"]
+            self.assertNotIn("pollInterval", rec)
+            self.assertNotIn("callbackBase", rec)
 
     def test_xml_escape_handles_uri_with_ampersand(self):
         """SetAVTransportURI URIs frequently contain & (cloud query params).
@@ -2079,8 +2112,6 @@ def make_sound_inputs(host="10.0.0.1", **overrides):
         "SetSubEnable":       StubSlot(0),
         "SetSubGain":         StubSlot(0),
         "SetTrueplay":        StubSlot(0),
-        "PollInterval":       StubSlot(0),
-        "HttpTimeout":        StubSlot(0),
     }
     base.update({k: (v if isinstance(v, StubSlot) else StubSlot(v))
                  for k, v in overrides.items()})

@@ -31,11 +31,7 @@
       { "type": "number", "identifier": "NextPrev",      "init_value": 0,   "label": "Next Prev Track Toggle 1 Next 0 Prev" },
       { "type": "number", "identifier": "PresetNextPrev","init_value": 0,   "label": "Next Prev Preset Toggle 1 Next 0 Prev" },
       { "type": "number", "identifier": "PlaySound",     "init_value": 0,   "label": "Play Sound by Index 1 to N" },
-      { "type": "number", "identifier": "VolStep",       "init_value": 2,   "label": "Volume Up Down Step" },
-      { "type": "number", "identifier": "PollInterval",  "init_value": 60,  "label": "Status Poll Interval seconds" },
-      { "type": "number", "identifier": "SubTimeout",    "init_value": 1800,"label": "UPnP Subscription Timeout seconds" },
-      { "type": "number", "identifier": "HttpTimeout",   "init_value": 5,   "label": "HTTP Timeout seconds" },
-      { "type": "string", "identifier": "CallbackBase",  "init_value": "",  "label": "Callback Base URL leave empty for auto" }
+      { "type": "number", "identifier": "VolStep",       "init_value": 2,   "label": "Volume Up Down Step" }
     ],
     "outputs": [
       { "type": "string", "identifier": "ZoneName",      "init_value": "", "label": "Sonos Zone Name" },
@@ -104,11 +100,7 @@
           { "label": "Naechster Vorheriger Titel Umschalter 1 Naechster 0 Vorheriger" },
           { "label": "Naechstes Vorheriges Preset Umschalter 1 Naechstes 0 Vorheriges" },
           { "label": "Sound per Index 1 bis N abspielen" },
-          { "label": "Lautstaerke-Schritt" },
-          { "label": "Status-Abfrageintervall Sekunden" },
-          { "label": "UPnP Abonnement Timeout Sekunden" },
-          { "label": "HTTP-Timeout Sekunden" },
-          { "label": "Callback-Basis-URL leer fuer Auto" }
+          { "label": "Lautstaerke-Schritt" }
         ],
         "translation_outputs": [
           { "label": "Sonos Zonen-Name" },

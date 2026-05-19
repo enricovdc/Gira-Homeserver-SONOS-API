@@ -417,11 +417,31 @@ def _lookup_group_via_admin(spec):
     return None
 
 
+def _admin_player_tunables(spec):
+    """Effective per-player tunables (PollInterval / SubTimeout /
+    HttpTimeout / CallbackBase). Layers any per-player overrides on
+    top of the project-wide defaults. Falls back to an empty dict
+    when the Admin LBS isn't on the canvas — `_reload_config` then
+    uses the hard-coded floors (60 / 1800 / 5)."""
+    for mod_name, mod in list(sys.modules.items()):
+        if mod is None:
+            continue
+        if "sonos_admin" in mod_name or "hsl3_22001" in mod_name:
+            fn = getattr(mod, "get_player_tunables", None)
+            if callable(fn):
+                try:
+                    d = fn(spec)
+                    if isinstance(d, dict):
+                        return d
+                except Exception:
+                    pass
+    return {}
+
+
 def _admin_player_defaults():
-    """Pull the Admin LBS's player tunable defaults (PollInterval,
-    SubTimeout, HttpTimeout, CallbackBase). Returns ``{}`` when Admin
-    isn't on the canvas or hasn't been initialised — the Player block
-    then uses its own input init values."""
+    """Pull the Admin LBS's project-wide player tunable defaults.
+    Kept for tests that exercise the global-fallback layer directly;
+    runtime configuration goes through ``_admin_player_tunables``."""
     for mod_name, mod in list(sys.modules.items()):
         if mod is None:
             continue
@@ -1046,22 +1066,17 @@ class LogicModule:
         self._host = resolved or (self._host_spec if _is_ip_literal(self._host_spec) else "")
         self._vol_step = max(1, int(inputs["VolStep"].value or 2))
 
-        # Tunables fall back to the Admin's player defaults when the
-        # input is left at its init value (0 / empty). Lets the
-        # integrator tune all Player blocks in one place via the Admin
-        # web UI without wiring four inputs per block.
-        defaults = _admin_player_defaults()
-        poll_in = int(inputs["PollInterval"].value or 0)
-        sub_in  = int(inputs["SubTimeout"].value or 0)
-        http_in = int(inputs["HttpTimeout"].value or 0)
-        self._poll_interval_s = max(10, poll_in or int(defaults.get("pollInterval") or 60))
-        self._sub_timeout_s   = max(60, sub_in  or int(defaults.get("subTimeout")   or 1800))
+        # Tunables (PollInterval / SubTimeout / HttpTimeout /
+        # CallbackBase) live entirely in the Admin: a project-wide
+        # default plus an optional per-player override stored on the
+        # player record. The Player block has no inputs for them —
+        # the integrator edits the values in the Admin web UI.
+        tunables = _admin_player_tunables(self._host_spec)
+        self._poll_interval_s = max(10, int(tunables.get("pollInterval") or 60))
+        self._sub_timeout_s   = max(60, int(tunables.get("subTimeout")   or 1800))
         self._renew_threshold_s = max(30, self._sub_timeout_s // 6)
-        self._http_timeout_s  = max(2,  http_in or int(defaults.get("httpTimeout")  or 5))
-
-        cb = to_str(inputs["CallbackBase"].value).strip().rstrip("/")
-        if not cb:
-            cb = (defaults.get("callbackBase") or "").strip().rstrip("/")
+        self._http_timeout_s  = max(2,  int(tunables.get("httpTimeout")  or 5))
+        cb = (tunables.get("callbackBase") or "").strip().rstrip("/")
         if not cb:
             cb = "http://{}:{}".format(_get_local_lan_ip(), self._notify_port)
         self._callback_base = cb
