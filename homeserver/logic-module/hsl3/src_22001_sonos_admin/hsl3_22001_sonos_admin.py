@@ -733,6 +733,11 @@ details.group-add .row { margin-top: 6px; }
                padding: 4px 10px; background: white; border: 1px solid #c0c0c0;
                font-size: 11px; cursor: pointer; user-select: none; }
 .member-chip.on { background: #BACE00; border-color: #BACE00; color: #202020; }
+.member-chip.master { background: #505050; border-color: #505050; color: white;
+                      cursor: not-allowed; }
+.member-chip.master:hover { background: #505050; }
+.member-chip.master .master-tag { font-style: normal; font-size: 10px;
+                                  opacity: 0.85; margin-left: 4px; }
 .member-chip input { display: none; }
 .group-members-display { font-size: 11px; color: #505050; }
 .group-members-display .empty { color: #a0a0a0; font-style: italic; }
@@ -919,6 +924,34 @@ function esc(s) {
   return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }
+
+// Cross-context clipboard copy: navigator.clipboard.writeText only
+// works in a Secure Context (HTTPS or localhost). The Admin runs on
+// plain HTTP over the LAN, so the modern API rejects and we'd fall
+// back to a prompt() — which is the bug the user reported. The legacy
+// execCommand('copy') path predates secure-context gating and works
+// over HTTP back to IE10. We try the modern API first when available,
+// then the legacy path, and only as a last resort show a prompt.
+async function copyToClipboard(text) {
+  if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+    try { await navigator.clipboard.writeText(text); return true; }
+    catch (e) { /* fall through to legacy */ }
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.left = '-9999px';
+    ta.style.top = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, ta.value.length);
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch (e) { return false; }
+}
 async function refreshPlayers() {
   const r = await api('GET', '/api/players');
   const list = document.getElementById('players');
@@ -1021,6 +1054,42 @@ async function refreshDiag() {
     'Groups: <code>' + (r.groupCount || 0) + '</code> &middot; ' +
     'Cloud authorized: <code>' + r.cloudAuthorized + '</code>';
 }
+// Render the member-chip area for a group editor. ``checked`` is a Set
+// of player ids the user picked as members; ``masterId`` is the
+// currently-selected master and is shown with a (master) tag + locked
+// checkbox so it's obvious which player coordinates the group. The
+// master is implicitly always "on" — Sonos requires the coordinator to
+// be part of its own group — but it can't be toggled off in this view.
+function renderMemberChips(container, checked, masterId) {
+  if (!container) return;
+  const entries = Object.entries(_playerIndex || {});
+  if (!entries.length) {
+    container.innerHTML = '<span class="muted">No players yet. Scan first.</span>';
+    return;
+  }
+  container.innerHTML = entries.map(([pid, label]) => {
+    const isMaster = pid === masterId;
+    const on = isMaster || checked.has(pid);
+    return '<label class="member-chip' +
+           (on ? ' on' : '') +
+           (isMaster ? ' master' : '') +
+           '" data-pid="' + esc(pid) + '">' +
+           '<input type="checkbox" value="' + esc(pid) + '"' +
+             (on ? ' checked' : '') +
+             (isMaster ? ' disabled' : '') + '>' +
+           esc(label) +
+           (isMaster ? ' <em class="master-tag">(master)</em>' : '') +
+           '</label>';
+  }).join('');
+}
+
+function chipsCheckedSet(container) {
+  const set = new Set();
+  if (!container) return set;
+  for (const i of container.querySelectorAll('input:checked')) set.add(i.value);
+  return set;
+}
+
 // Cached so refreshGroups can label master + member cells without
 // re-fetching /api/players.
 let _playerIndex = {};
@@ -1037,12 +1106,12 @@ async function refreshGroups() {
   const masterSel = document.getElementById('ng-master');
   masterSel.innerHTML = '<option value="">(pick a master)</option>' +
     players.map(p => '<option value="' + esc(p.id) + '">' + esc(_playerIndex[p.id]) + '</option>').join('');
-  const memberPick = document.getElementById('ng-members');
-  memberPick.innerHTML = players.map(p =>
-    '<label class="member-chip" data-pid="' + esc(p.id) + '">' +
-      '<input type="checkbox" value="' + esc(p.id) + '">' + esc(_playerIndex[p.id]) +
-    '</label>'
-  ).join('') || '<span class="muted">No players yet. Scan first.</span>';
+  // Render the "Add" form's member chips with no master selected yet;
+  // the change-handler on #ng-master will re-render with the master
+  // chip locked + tagged whenever the user picks one.
+  renderMemberChips(document.getElementById('ng-members'),
+                    new Set(),
+                    document.getElementById('ng-master').value);
 
   // Now the table itself.
   const tbody = document.querySelector('#groups tbody');
@@ -1103,20 +1172,19 @@ document.addEventListener('click', async (ev) => {
         .map(([pid, label]) =>
           '<option value="' + esc(pid) + '"' + (pid === g.master ? ' selected' : '') + '>' +
           esc(label) + '</option>').join('');
-      const memberChips = Object.entries(_playerIndex).map(([pid, label]) => {
-        const on = (g.members || []).includes(pid);
-        return '<label class="member-chip ' + (on ? 'on' : '') + '" data-pid="' + esc(pid) + '">' +
-               '<input type="checkbox" value="' + esc(pid) + '"' + (on ? ' checked' : '') + '>' +
-               esc(label) + '</label>';
-      }).join('');
       cell.innerHTML =
         '<div class="row"><label class="muted" style="width:60px">Master:</label>' +
           '<select data-gemaster="' + esc(g.id) + '" style="max-width:240px">' + playerOpts + '</select></div>' +
         '<div class="row"><label class="muted" style="width:60px;vertical-align:top">Members:</label>' +
-          '<div class="members-pick" data-gemembers="' + esc(g.id) + '">' + memberChips + '</div></div>' +
+          '<div class="members-pick" data-gemembers="' + esc(g.id) + '"></div></div>' +
         '<div class="row"><button class="small" data-gsave="' + esc(g.id) + '">Save</button>' +
           '<button class="small secondary" data-gcancel="' + esc(g.id) + '">Cancel</button></div>';
       editTr.style.display = '';
+      // Render chips through the shared helper so the master is shown
+      // tagged + locked. Re-renders on master-select change below.
+      renderMemberChips(cell.querySelector('[data-gemembers]'),
+                        new Set(g.members || []),
+                        g.master);
     }
     if (t.dataset.gcancel) {
       const editTr = document.getElementById('gedit-' + t.dataset.gcancel);
@@ -1141,11 +1209,29 @@ document.addEventListener('click', async (ev) => {
 
 // Sync the visual highlight on member chips whenever their hidden
 // checkbox changes — runs for clicks on either the label or the input.
+// Also re-renders the chip area when the master <select> changes so
+// the "(master)" tag follows the dropdown selection.
 document.addEventListener('change', (ev) => {
   const t = ev.target;
   if (t.tagName === 'INPUT' && t.type === 'checkbox') {
     const chip = t.closest('.member-chip');
     if (chip) chip.classList.toggle('on', t.checked);
+  }
+  if (t.id === 'ng-master') {
+    // Add-form master changed: re-render the chip area below so the
+    // new master gets the locked-tagged style. Preserve any chips the
+    // user already ticked.
+    const chips = document.getElementById('ng-members');
+    renderMemberChips(chips, chipsCheckedSet(chips), t.value);
+  }
+  if (t.dataset && t.dataset.gemaster) {
+    // Inline editor master changed: same re-render for that group's
+    // chip area. The selector hangs off the same <tr> as the chips.
+    const editTr = t.closest('tr');
+    if (editTr) {
+      const chips = editTr.querySelector('[data-gemembers]');
+      renderMemberChips(chips, chipsCheckedSet(chips), t.value);
+    }
   }
 });
 
@@ -1208,14 +1294,18 @@ document.addEventListener('click', async (ev) => {
       refreshAll();
     }
     if (t.dataset.host !== undefined) {
-      // Copy the player's UUID/MAC/IP to the clipboard so the integrator
-      // can paste it directly into the Sonos Player block's Host input.
+      // Copy the UUID into the clipboard. navigator.clipboard.writeText
+      // requires a Secure Context (HTTPS / localhost) — the Admin runs
+      // on plain HTTP over the LAN, so the modern API would reject.
+      // The legacy execCommand('copy') path doesn't have that
+      // restriction and works in every browser back to IE10.
       const v = t.dataset.host || '';
       if (!v) return toast('No identifier available', true);
-      try { await navigator.clipboard.writeText(v); toast('Copied: ' + v); }
-      catch (e) {
-        // Older browsers without clipboard API: show the value so the user
-        // can copy it manually.
+      if (await copyToClipboard(v)) {
+        toast('Copied: ' + v);
+      } else {
+        // Last resort if even the legacy path was blocked (e.g. by an
+        // extension): show a prompt the user can copy from manually.
         prompt('Copy this value into the Sonos Player Host input:', v);
       }
     }
