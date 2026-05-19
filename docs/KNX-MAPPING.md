@@ -168,8 +168,16 @@ the canvas. The Host input takes the same value as the matching LBS
 | 5/0/302 | 1.001 | `SetLoudness`   | 0/1 |
 | 5/0/303 | 1.001 | `SetNightMode`  | 0/1 (soundbar only) |
 | 5/0/304 | 1.001 | `SetDialogMode` | 0/1 (soundbar only) |
-| 5/0/305 | 1.001 | `SetCrossfade`  | 0/1 |
-| 5/0/306 | 7.007 | `SetSleepTimer` | minutes (2-byte unsigned). 0 cancels. |
+| 5/0/305 | 1.001 | `SetCrossfade`     | 0/1 |
+| 5/0/306 | 7.007 | `SetSleepTimer`    | minutes (2-byte unsigned). 0 cancels. |
+| 5/0/307 | 1.001 | `SetTVMode`        | Rising edge engages the soundbar's TV input |
+| 5/0/308 | 1.001 | `SetLED`           | 0/1 — status LED |
+| 5/0/320 | 5.001 | `SetGroupVolume`   | 0–100 % whole-group volume (coordinator only) |
+| 5/0/321 | 1.001 | `SetSurroundEnable`| 0/1 — soundbar surround channels |
+| 5/0/322 | 6.010 | `SetSurroundLevel` | -15..+15 |
+| 5/0/323 | 1.001 | `SetSubEnable`     | 0/1 — paired Sub on/off |
+| 5/0/324 | 6.010 | `SetSubGain`       | -15..+15 |
+| 5/0/325 | 1.001 | `SetTrueplay`      | 0/1 — apply stored calibration |
 
 ### Outputs
 
@@ -183,7 +191,18 @@ the canvas. The Host input takes the same value as the matching LBS
 | 5/0/315 | 1.002 | `DialogMode`          | 0/1 |
 | 5/0/316 | 1.002 | `Crossfade`           | 0/1 |
 | 5/0/317 | 7.005 | `SleepTimerRemaining` | seconds remaining (2-byte) |
-| 5/0/318 | 16.001 | `LastError`          | Error tag (`NIGHTMODE_UNSUPPORTED`, `UNREACHABLE`, …) |
+| 5/0/330 | 1.002 | `TVMode`              | 1 = soundbar TV input engaged |
+| 5/0/331 | 1.002 | `LED`                 | 1 = status LED on |
+| 5/0/332 | 5.001 | `BatteryPercent`      | 0–100 % (Move / Roam) |
+| 5/0/333 | 1.002 | `BatteryCharging`     | 1 = charging |
+| 5/0/334 | 5.001 | `GroupVolume`         | 0–100 % whole-group volume |
+| 5/0/335 | 1.002 | `SurroundEnable`      | 0/1 |
+| 5/0/336 | 6.010 | `SurroundLevel`       | -15..+15 |
+| 5/0/337 | 1.002 | `SubEnable`           | 0/1 |
+| 5/0/338 | 6.010 | `SubGain`             | -15..+15 |
+| 5/0/339 | 1.002 | `Trueplay`            | 1 = calibration applied |
+| 5/0/340 | 1.002 | `TrueplayAvailable`   | 1 = calibration profile exists on player |
+| 5/0/341 | 16.001 | `LastError`          | Error tag (`NIGHTMODE_UNSUPPORTED`, `GROUP_NOT_COORDINATOR`, `TV_NO_UUID`, …) |
 
 DPT 6.010 "Counter pulses (signed)" carries the -10..+10 range
 natively. DPT 7.007 "Time (16-bit unsigned)" gives plenty of room

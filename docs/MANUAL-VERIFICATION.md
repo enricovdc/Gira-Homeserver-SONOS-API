@@ -2,7 +2,7 @@
 
 Run through this list against real Sonos hardware when commissioning
 the HSL3 modules, after a Sonos firmware update, or after network
-changes. The 108 unit tests under `tests/test_logic_modules.py` cover
+changes. The 117 unit tests under `tests/test_logic_modules.py` cover
 the pure logic against a stubbed framework; this checklist is for
 hardware-in-the-loop validation.
 
@@ -127,6 +127,29 @@ LBS 22002 onto the canvas.
 - [ ] Write 5 to `SetSleepTimer` (5 min). `SleepTimerRemaining`
       output starts ~300 and counts down on each Tick.
 - [ ] Write 0 to `SetSleepTimer`. `SleepTimerRemaining` drops to 0.
+- [ ] Write 1 to `SetLED`. The status LED on the speaker lights up.
+      `LED` output reads 1. Write 0 → LED off, output reads 0.
+- [ ] On a Move/Roam: `BatteryPercent` reads the current level (0-100)
+      within ~60 s, `BatteryCharging` flips to 1 when plugged in.
+      On a mains-only speaker: both stay at 0.
+- [ ] On a soundbar (Beam/Arc/Playbar): write 1 to `SetTVMode`.
+      The TV input engages; `TVMode` output → 1 within one Tick.
+      Trigger a music preset on LBS 22000 to return to music.
+- [ ] On a non-soundbar: write 1 to `SetTVMode` → `LastError` reads
+      `NO_HT_STREAM`. No URI change.
+- [ ] On a soundbar with surround pair: write 1 to `SetSurroundEnable`,
+      then a value to `SetSurroundLevel` (-15..15). Both outputs mirror.
+- [ ] On a player with paired Sub: write 1 to `SetSubEnable` and
+      a value to `SetSubGain`. Outputs mirror.
+- [ ] On the **group coordinator** speaker: write 50 to
+      `SetGroupVolume`. The whole group's volume scales to ~50 %
+      proportionally. `GroupVolume` output reads 50.
+- [ ] On a **slave** speaker in a group: write 50 to `SetGroupVolume`
+      → `LastError` reads `GROUP_NOT_COORDINATOR`. No volume change.
+- [ ] On a player with a Trueplay calibration: write 0 to `SetTrueplay`
+      → calibration is no longer applied, `Trueplay` output reads 0
+      and `TrueplayAvailable` stays at 1 (the profile still exists).
+      Write 1 → calibration re-applied, `Trueplay` reads 1.
 
 ## Sounds / announcements
 

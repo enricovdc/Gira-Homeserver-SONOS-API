@@ -2070,9 +2070,17 @@ def make_sound_inputs(host="10.0.0.1", **overrides):
         "SetNightMode":   StubSlot(0),
         "SetDialogMode":  StubSlot(0),
         "SetCrossfade":   StubSlot(0),
-        "SetSleepTimer":  StubSlot(0),
-        "PollInterval":   StubSlot(0),
-        "HttpTimeout":    StubSlot(0),
+        "SetSleepTimer":      StubSlot(0),
+        "SetTVMode":          StubSlot(0),
+        "SetLED":             StubSlot(0),
+        "SetGroupVolume":     StubSlot(0),
+        "SetSurroundEnable":  StubSlot(0),
+        "SetSurroundLevel":   StubSlot(0),
+        "SetSubEnable":       StubSlot(0),
+        "SetSubGain":         StubSlot(0),
+        "SetTrueplay":        StubSlot(0),
+        "PollInterval":       StubSlot(0),
+        "HttpTimeout":        StubSlot(0),
     }
     base.update({k: (v if isinstance(v, StubSlot) else StubSlot(v))
                  for k, v in overrides.items()})
@@ -2258,6 +2266,187 @@ class TestSonosSoundLogicModule(unittest.TestCase):
         self.assertEqual(fw.outputs["Crossfade"],    0)
         self.assertEqual(fw.outputs["SleepTimerRemaining"], 900.0)
         self.assertEqual(fw.outputs["Online"],       1)
+
+    def test_set_led_dispatches_on_off_strings(self):
+        fw, lm = self._make()
+        calls = []
+        lm._soap = lambda s, a, e: (calls.append((s, a, e)) or (True, "", ""))
+        ins = make_sound_inputs(host="10.0.0.5")
+        ins["SetLED"] = StubSlot(1, changed=True)
+        lm.on_calc(ins)
+        self.assertEqual(calls[0][0], "DeviceProperties")
+        self.assertEqual(calls[0][1], "SetLEDState")
+        self.assertIn("<DesiredLEDState>On</DesiredLEDState>", calls[0][2])
+        self.assertEqual(fw.outputs["LED"], 1)
+        # 0 → Off
+        calls.clear()
+        ins = make_sound_inputs(host="10.0.0.5")
+        ins["SetLED"] = StubSlot(0, changed=True)
+        lm.on_calc(ins)
+        self.assertIn("<DesiredLEDState>Off</DesiredLEDState>", calls[0][2])
+
+    def test_set_group_volume_clamps_and_dispatches(self):
+        fw, lm = self._make()
+        calls = []
+        lm._soap = lambda s, a, e: (calls.append((s, a, e)) or (True, "", ""))
+        ins = make_sound_inputs(host="10.0.0.5")
+        ins["SetGroupVolume"] = StubSlot(150, changed=True)  # over-range
+        lm.on_calc(ins)
+        self.assertEqual(calls[0][0], "GroupRenderingControl")
+        self.assertEqual(calls[0][1], "SetGroupVolume")
+        self.assertIn("<DesiredVolume>100</DesiredVolume>", calls[0][2])
+        self.assertEqual(fw.outputs["GroupVolume"], 100.0)
+
+    def test_set_group_volume_non_coordinator_writes_tagged_error(self):
+        """Sonos returns UPnP error 701 when SetGroupVolume is called
+        on a non-coordinator. The module must surface this as
+        GROUP_NOT_COORDINATOR so the integrator can wire the input
+        to the right Player block."""
+        fw, lm = self._make()
+        lm._soap = lambda s, a, e: (False, "<errorCode>701</errorCode>", "701")
+        ins = make_sound_inputs(host="10.0.0.5")
+        ins["SetGroupVolume"] = StubSlot(40, changed=True)
+        lm.on_calc(ins)
+        self.assertEqual(fw.outputs["LastError"], b"GROUP_NOT_COORDINATOR")
+
+    def test_set_surround_and_sub_eq_dispatches(self):
+        fw, lm = self._make()
+        calls = []
+        lm._soap = lambda s, a, e: (calls.append(e) or (True, "", ""))
+        ins = make_sound_inputs(host="10.0.0.5")
+        ins["SetSurroundEnable"] = StubSlot(1, changed=True)
+        lm.on_calc(ins)
+        self.assertIn("<EQType>SurroundEnable</EQType>", calls[0])
+        self.assertEqual(fw.outputs["SurroundEnable"], 1)
+        # Level clamps to -15..15
+        calls.clear()
+        ins = make_sound_inputs(host="10.0.0.5")
+        ins["SetSurroundLevel"] = StubSlot(99, changed=True)
+        lm.on_calc(ins)
+        self.assertIn("<EQType>SurroundLevel</EQType>", calls[0])
+        self.assertIn("<DesiredValue>15</DesiredValue>", calls[0])
+        self.assertEqual(fw.outputs["SurroundLevel"], 15.0)
+        # SubGain clamps negative
+        calls.clear()
+        ins = make_sound_inputs(host="10.0.0.5")
+        ins["SetSubGain"] = StubSlot(-99, changed=True)
+        lm.on_calc(ins)
+        self.assertIn("<EQType>SubGain</EQType>", calls[0])
+        self.assertIn("<DesiredValue>-15</DesiredValue>", calls[0])
+        self.assertEqual(fw.outputs["SubGain"], -15.0)
+
+    def test_set_surround_unsupported_writes_tagged_error(self):
+        fw, lm = self._make()
+        lm._soap = lambda s, a, e: (False, "<errorCode>800</errorCode>", "800")
+        ins = make_sound_inputs(host="10.0.0.5")
+        ins["SetSurroundEnable"] = StubSlot(1, changed=True)
+        lm.on_calc(ins)
+        self.assertEqual(fw.outputs["LastError"], b"SURROUND_UNSUPPORTED")
+
+    def test_set_trueplay_dispatches_and_marks(self):
+        fw, lm = self._make()
+        calls = []
+        lm._soap = lambda s, a, e: (calls.append((s, a, e)) or (True, "", ""))
+        ins = make_sound_inputs(host="10.0.0.5")
+        ins["SetTrueplay"] = StubSlot(1, changed=True)
+        lm.on_calc(ins)
+        self.assertEqual(calls[0][1], "SetRoomCalibrationStatus")
+        self.assertIn("<RoomCalibrationEnabled>1</RoomCalibrationEnabled>", calls[0][2])
+        self.assertEqual(fw.outputs["Trueplay"], 1)
+
+    def test_switch_tv_mode_uses_player_uuid(self):
+        """TV mode URI carries the soundbar's RINCON UUID. The action
+        must look this up via the Admin player registry; without a UUID
+        we surface TV_NO_UUID rather than emitting an invalid URI."""
+        # Seed an Admin player with a known UUID across every loaded
+        # admin module (multiple are kept around in sys.modules from
+        # earlier test classes).
+        for mod_name, mod in list(sys.modules.items()):
+            if mod is None:
+                continue
+            if "sonos_admin" in mod_name and hasattr(mod, "_players"):
+                with mod._registry_lock:
+                    mod._players.clear()
+                    mod._players["beam"] = {
+                        "id": "beam", "name": "Beam", "zoneName": "Living Room",
+                        "ip": "10.0.0.5", "mac": "", "uuid": "RINCON_BEAMUUID",
+                        "model": "Beam", "source": "ssdp",
+                    }
+        fw, lm = self._make()
+        lm._host_spec = "RINCON_BEAMUUID"
+        calls = []
+        lm._soap = lambda s, a, e: (calls.append((s, a, e)) or (True, "", ""))
+        ins = make_sound_inputs(host="RINCON_BEAMUUID")
+        # Re-create with the UUID host since make_sound_inputs takes a
+        # different signature than the default fixture.
+        ins["SetTVMode"] = StubSlot(1, changed=True)
+        lm.on_calc(ins)
+        actions = [a for (_s, a, _e) in calls]
+        # Expect SetAVTransportURI + Play.
+        self.assertIn("SetAVTransportURI", actions)
+        self.assertIn("Play", actions)
+        # The URI must be the soundbar's UUID stream.
+        seturi = [e for (_s, a, e) in calls if a == "SetAVTransportURI"][0]
+        self.assertIn("x-sonos-htastream:RINCON_BEAMUUID:spdif", seturi)
+        self.assertEqual(fw.outputs["TVMode"], 1)
+
+    def test_switch_tv_mode_without_uuid_writes_error(self):
+        # No Admin player records → UUID lookup returns nothing.
+        for mod_name, mod in list(sys.modules.items()):
+            if mod is None:
+                continue
+            if "sonos_admin" in mod_name and hasattr(mod, "_players"):
+                with mod._registry_lock:
+                    mod._players.clear()
+        fw, lm = self._make()
+        lm._host_spec = "10.0.0.5"
+        lm._uuid = ""
+        calls = []
+        lm._soap = lambda *a, **kw: (calls.append(a) or (True, "", ""))
+        ins = make_sound_inputs(host="10.0.0.5")
+        ins["SetTVMode"] = StubSlot(1, changed=True)
+        lm.on_calc(ins)
+        self.assertEqual(calls, [])
+        self.assertEqual(fw.outputs["LastError"], b"TV_NO_UUID")
+
+    def test_fetch_battery_status_parses_xml(self):
+        """The /status/batterystatus endpoint returns XML with <Data>
+        rows. Helper must extract Level (percent) and PowerSource
+        (charging boolean) and return None when the endpoint 404s
+        (non-portable speaker)."""
+        fw, lm = self._make()
+        class _R:
+            def __init__(self, status, body):
+                self.status_code = status
+                self.text = body
+        # Stub requests.get to return a Move-style response.
+        orig = self.mod.requests.get
+        try:
+            self.mod.requests.get = lambda *a, **kw: _R(200,
+                '<ZPSupportInfo><LocalBatteryStatus>'
+                '<Data name="Health">GREEN</Data>'
+                '<Data name="Level">73</Data>'
+                '<Data name="PowerSource">CHARGING</Data>'
+                '</LocalBatteryStatus></ZPSupportInfo>')
+            pct, charging = lm._fetch_battery_status()
+            self.assertEqual(pct, 73)
+            self.assertTrue(charging)
+            # PowerSource=BATTERY → not charging
+            self.mod.requests.get = lambda *a, **kw: _R(200,
+                '<ZPSupportInfo><LocalBatteryStatus>'
+                '<Data name="Level">42</Data>'
+                '<Data name="PowerSource">BATTERY</Data>'
+                '</LocalBatteryStatus></ZPSupportInfo>')
+            pct, charging = lm._fetch_battery_status()
+            self.assertEqual(pct, 42)
+            self.assertFalse(charging)
+            # 404 → (None, None) — non-portable hardware
+            self.mod.requests.get = lambda *a, **kw: _R(404, "")
+            pct, charging = lm._fetch_battery_status()
+            self.assertIsNone(pct)
+            self.assertIsNone(charging)
+        finally:
+            self.mod.requests.get = orig
 
     def test_no_host_writes_error_without_soap(self):
         fw, lm = self._make()

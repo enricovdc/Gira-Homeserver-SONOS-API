@@ -3,7 +3,7 @@
 Every user-facing function the integration exposes, and where it lives
 in the HSL3 modules. Refreshed against the v1.0.0 module shipped in
 this repo: **LBS 22000 Sonos Player** with 29 inputs / 28 outputs and
-**LBS 22002 Sonos Sound Enhancement** (optional companion) with 10 inputs / 9 outputs and no persistent state. **LBS 22001 Sonos Admin** with 7 inputs / 8 outputs + 6 retentive
+**LBS 22002 Sonos Sound Enhancement** (optional companion) with 18 inputs / 20 outputs and no persistent state. **LBS 22001 Sonos Admin** with 7 inputs / 8 outputs + 6 retentive
 stores.
 
 ## Sonos control surface (LBS 22000 inputs)
@@ -121,10 +121,19 @@ The Host input takes the same UUID/MAC/name/IP as the matching LBS
 | Soundbar Dialog Mode | `SetDialogMode` (E6) | `DialogMode` (A6) | `RenderingControl#SetEQ` with `EQType=DialogLevel`. `DIALOGMODE_UNSUPPORTED` on non-soundbars. |
 | Crossfade | `SetCrossfade` (E7) | `Crossfade` (A7) | `AVTransport#SetCrossfadeMode`. |
 | Sleep timer | `SetSleepTimer` (E8) | `SleepTimerRemaining` (A8) | Minutes in (0 cancels); `AVTransport#ConfigureSleepTimer` with `NewSleepTimerDuration=HH:MM:SS`. Output is the remaining seconds polled via `GetRemainingSleepTimerDuration`. |
+| Soundbar TV input | `SetTVMode` (E9) | `TVMode` (A9) | Rising edge dispatches `SetAVTransportURI(x-sonos-htastream:<UUID>:spdif) + Play`. Reverse is "trigger a music preset on LBS 22000". Polled via `GetMediaInfo`. UUID looked up via the Admin registry. |
+| Status LED | `SetLED` (E10) | `LED` (A10) | `DeviceProperties#SetLEDState` / `GetLEDState` — accepts the literal strings "On" / "Off". |
+| Battery (Move / Roam) | n/a | `BatteryPercent` (A11), `BatteryCharging` (A12) | Plain HTTP `GET /status/batterystatus` on the player; parses `<Data name="Level">` and `<Data name="PowerSource">`. 0 / 0 on mains-only hardware. |
+| Group volume | `SetGroupVolume` (E11) | `GroupVolume` (A13) | `GroupRenderingControl#SetGroupVolume` / `GetGroupVolume`. Single GA controls the whole zone proportionally. Coordinator-only — slaves surface `GROUP_NOT_COORDINATOR` on LastError when UPnP returns error 701. |
+| Surround enable | `SetSurroundEnable` (E12) | `SurroundEnable` (A14) | `RenderingControl#SetEQ` with `EQType=SurroundEnable`. Soundbar+surround-pair only. `SURROUND_UNSUPPORTED` on hardware without surrounds. |
+| Surround level | `SetSurroundLevel` (E13) | `SurroundLevel` (A15) | Same SetEQ, `EQType=SurroundLevel`. Clamped -15..+15. |
+| Sub enable | `SetSubEnable` (E14) | `SubEnable` (A16) | `SetEQ` `EQType=SubEnable`. `SUB_UNSUPPORTED` when no Sub is paired. |
+| Sub gain | `SetSubGain` (E15) | `SubGain` (A17) | `SetEQ` `EQType=SubGain`. Clamped -15..+15. |
+| Trueplay applied | `SetTrueplay` (E16) | `Trueplay` (A18), `TrueplayAvailable` (A19) | `RenderingControl#SetRoomCalibrationStatus` / `GetRoomCalibrationStatus`. Only toggles application; calibration itself is iOS-only. `TrueplayAvailable` is 1 when a profile exists. |
 | Reachability | n/a | `Online` (A1) | 1 when at least one SOAP call in the latest Tick succeeded. |
-| Error | n/a | `LastError` (A9) | `SET_BASS_FAILED` / `NIGHTMODE_UNSUPPORTED` / `DIALOGMODE_UNSUPPORTED` / `UNREACHABLE` / `HTTP_<n>` / `EXCEPTION: …`. |
+| Error | n/a | `LastError` (A20) | `SET_BASS_FAILED` / `NIGHTMODE_UNSUPPORTED` / `DIALOGMODE_UNSUPPORTED` / `SURROUND_UNSUPPORTED` / `SUB_UNSUPPORTED` / `GROUP_NOT_COORDINATOR` / `TV_NO_UUID` / `NO_HT_STREAM` / `TRUEPLAY_UNAVAILABLE` / `UNREACHABLE` / `HTTP_<n>` / `EXCEPTION: …`. |
 
-Tunable inputs `PollInterval` (E9) and `HttpTimeout` (E10) follow the
+Tunable inputs `PollInterval` (E17) and `HttpTimeout` (E18) follow the
 same fall-through pattern as on LBS 22000 — leave at 0 to use the
 Admin's Player Defaults values.
 
