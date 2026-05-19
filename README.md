@@ -148,12 +148,16 @@ The modules conform to every rule in the GiraHSL skill:
 - [homeserver/logic-module/hsl3/README.md](homeserver/logic-module/hsl3/README.md)
   — full input / output / parameter reference for both modules,
   architecture, build flow, testing.
+- [homeserver/logic-module/hsl3/FEATURE-PARITY.md](homeserver/logic-module/hsl3/FEATURE-PARITY.md)
+  — exhaustive mapping of every integration feature to its HSL3 home.
+- [homeserver/logic-module/hsl3/DESIGN-DECISIONS.md](homeserver/logic-module/hsl3/DESIGN-DECISIONS.md)
+  — trade-offs and rationale behind the implementation.
+- [homeserver/logic-module/hsl3/MANUAL-VERIFICATION.md](homeserver/logic-module/hsl3/MANUAL-VERIFICATION.md)
+  — hardware commissioning checklist.
 - [homeserver/KNX-MAPPING.md](homeserver/KNX-MAPPING.md)
-  — recommended KNX group-address layout and DPTs for control inputs
-  and status outputs.
+  — recommended KNX group-address layout and DPTs.
 - [homeserver/logic-module/soap/](homeserver/logic-module/soap/)
-  — raw SOAP envelopes and NOTIFY-parser regex patterns, kept as a
-  wire-format reference. Not used directly in Experte — the same
+  — raw SOAP envelopes and NOTIFY format reference. The same
   envelopes are embedded as string constants in
   `hsl3_22000_sonos_player.py`.
 

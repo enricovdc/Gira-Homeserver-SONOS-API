@@ -17,7 +17,10 @@ use no registration is needed.
 
 ```
 hsl3/
-├── README.md                         this file
+├── README.md                         this file (architecture + build + import)
+├── FEATURE-PARITY.md                 every function and where it lives
+├── DESIGN-DECISIONS.md               trade-offs + rationale behind the code
+├── MANUAL-VERIFICATION.md            hardware-in-the-loop commissioning checklist
 ├── src_22000_sonos_player/
 │   ├── hsl3_22000_sonos_player.py    LogicModule source
 │   └── config.json                   inputs / outputs / store / timer / scripts
