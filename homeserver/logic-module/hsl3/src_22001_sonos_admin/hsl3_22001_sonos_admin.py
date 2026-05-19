@@ -70,7 +70,8 @@ SONOS_TOKEN_URL = "https://api.sonos.com/login/v3/oauth/access"
 
 _registry_lock = threading.RLock()
 _players = {}     # id(str) -> {"id","name","ip","mac","uuid","model","source"}
-_stations = {}    # id(str) -> {"id","name","uri"}
+_stations = {}    # id(str) -> {"id","name","uri","metadata"}
+_groups = {}      # id(str) -> {"id","name","master","members"} (master/members are player ids)
 _cloud = {
     "clientId": "",
     "clientSecret": "",
@@ -199,6 +200,38 @@ def resolve_host(spec):
             if rec.get("uuid") == spec:
                 return rec.get("ip", "")
     return ""
+
+
+def get_group(index_or_name):
+    """Return a group preset by alphabetical index (1..N) or by name
+    (case-insensitive). The record is a dict:
+
+        {
+          "id":       <internal id>,
+          "name":     <group label>,
+          "master":   <player-id of the coordinator>,
+          "members":  [<player-id>, <player-id>, ...]   (excludes master)
+        }
+
+    LBS 22000 calls this when a Player block's GroupPreset input fires;
+    it then resolves each player-id to a current IP / UUID via
+    get_player_record() and issues the SetAVTransportURI sequence."""
+    if index_or_name is None:
+        return None
+    key = str(index_or_name).strip()
+    if not key:
+        return None
+    with _registry_lock:
+        if key.isdigit():
+            idx = int(key)
+            sorted_groups = sorted(_groups.values(), key=lambda g: g["name"].lower())
+            if 1 <= idx <= len(sorted_groups):
+                return dict(sorted_groups[idx - 1])
+            return None
+        for rec in _groups.values():
+            if rec["name"].lower() == key.lower():
+                return dict(rec)
+    return None
 
 
 def get_player_record(spec):
@@ -676,6 +709,19 @@ code { background: #f5f5f5; padding: 1px 6px; border: 1px solid #e8e8e8;
   .player-card .pc-grid { grid-template-columns: 1fr 1fr; }
   .player-card .pc-actions { grid-column: 1 / -1; justify-content: flex-end; }
 }
+/* Group preset editor */
+details.group-add { margin-top: 12px; padding: 8px 12px; background: #f5f5f5; border: 1px solid #e0e0e0; }
+details.group-add summary { font-weight: 400; color: #505050; cursor: pointer; padding: 4px 0; }
+details.group-add .row { margin-top: 6px; }
+.members-pick { display: flex; flex-wrap: wrap; gap: 6px; }
+.member-chip { display: inline-flex; align-items: center; gap: 4px;
+               padding: 4px 10px; background: white; border: 1px solid #c0c0c0;
+               font-size: 11px; cursor: pointer; user-select: none; }
+.member-chip.on { background: #BACE00; border-color: #BACE00; color: #202020; }
+.member-chip input { display: none; }
+.group-members-display { font-size: 11px; color: #505050; }
+.group-members-display .empty { color: #a0a0a0; font-style: italic; }
+
 /* Inline favorites pane, shown when "Favorites" is clicked on a card */
 .pc-favs:empty { display: none; }
 .pc-favs { margin-top: 10px; padding: 8px 12px; background: #f5f5f5;
@@ -757,6 +803,46 @@ code { background: #f5f5f5; padding: 1px 6px; border: 1px solid #e8e8e8;
       <input id="ns-uri"  placeholder="stream URL: http://... or x-rincon-mp3radio://...">
       <button id="ns-add">Add preset</button>
     </div>
+  </section>
+
+  <section>
+    <h2>Group presets</h2>
+    <p class="muted">
+      Pre-defined Sonos zone groups. Each preset picks a
+      <strong>master</strong> (the coordinator that keeps playing its
+      content) plus one or more <strong>members</strong> that join.
+      From any Sonos Player block write the <strong>#</strong> below
+      into <code>GroupPreset</code> (numeric) or the <strong>Name</strong>
+      into <code>GroupPresetName</code> (string) to form the group on
+      demand. Write <code>Ungroup = 1</code> on a player to make it
+      stand alone again.
+    </p>
+    <table id="groups">
+      <thead><tr>
+        <th style="width:6%">#</th>
+        <th style="width:22%">Name</th>
+        <th style="width:22%">Master</th>
+        <th>Members</th>
+        <th style="width:10%">Actions</th>
+      </tr></thead><tbody></tbody>
+    </table>
+    <details class="group-add">
+      <summary>Add group preset</summary>
+      <div class="row">
+        <input id="ng-name" placeholder="name (e.g. Whole Home)" style="max-width: 220px">
+      </div>
+      <div class="row">
+        <label class="muted" style="width: 60px">Master:</label>
+        <select id="ng-master" style="max-width: 240px"></select>
+      </div>
+      <div class="row">
+        <label class="muted" style="width: 60px; vertical-align: top">Members:</label>
+        <div id="ng-members" class="members-pick"></div>
+      </div>
+      <div class="row">
+        <button id="ng-add">Add group preset</button>
+      </div>
+    </details>
   </section>
 
   <section>
@@ -905,10 +991,166 @@ async function refreshDiag() {
     'Listener port: <code>' + r.listenPort + '</code> &middot; ' +
     'Players: <code>' + r.playerCount + '</code> &middot; ' +
     'Presets: <code>' + r.stationCount + '</code> &middot; ' +
+    'Groups: <code>' + (r.groupCount || 0) + '</code> &middot; ' +
     'Cloud authorized: <code>' + r.cloudAuthorized + '</code>';
 }
+// Cached so refreshGroups can label master + member cells without
+// re-fetching /api/players.
+let _playerIndex = {};
+
+async function refreshGroups() {
+  const r = await api('GET', '/api/groups');
+  // Build the player picker options every refresh so master + members
+  // dropdowns reflect the latest registry.
+  const players = (await api('GET', '/api/players')).players;
+  _playerIndex = {};
+  for (const p of players) {
+    _playerIndex[p.id] = (p.zoneName || p.name || p.ip || p.id);
+  }
+  const masterSel = document.getElementById('ng-master');
+  masterSel.innerHTML = '<option value="">(pick a master)</option>' +
+    players.map(p => '<option value="' + esc(p.id) + '">' + esc(_playerIndex[p.id]) + '</option>').join('');
+  const memberPick = document.getElementById('ng-members');
+  memberPick.innerHTML = players.map(p =>
+    '<label class="member-chip" data-pid="' + esc(p.id) + '">' +
+      '<input type="checkbox" value="' + esc(p.id) + '">' + esc(_playerIndex[p.id]) +
+    '</label>'
+  ).join('') || '<span class="muted">No players yet. Scan first.</span>';
+
+  // Now the table itself.
+  const tbody = document.querySelector('#groups tbody');
+  tbody.innerHTML = '';
+  const sorted = [...r.groups].sort(
+    (a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase())
+  );
+  sorted.forEach((g, i) => {
+    const tr = document.createElement('tr');
+    const masterLabel = _playerIndex[g.master] || g.master || '(?)';
+    const memberLabels = (g.members || []).map(id => _playerIndex[id] || id);
+    const memberHtml = memberLabels.length
+      ? memberLabels.map(l => esc(l)).join(', ')
+      : '<span class="empty">none</span>';
+    tr.innerHTML =
+      '<td><strong>' + (i + 1) + '</strong></td>' +
+      '<td><input data-gedit="' + esc(g.id) + '" data-field="name" value="' + esc(g.name) + '"></td>' +
+      '<td>' + esc(masterLabel) + '</td>' +
+      '<td class="group-members-display">' + memberHtml + '</td>' +
+      '<td>' +
+        '<button class="secondary small" data-gedit-open="' + esc(g.id) + '" title="Edit members">Edit</button>' +
+        '<button class="danger small" data-del-group="' + esc(g.id) + '">x</button>' +
+      '</td>';
+    tbody.appendChild(tr);
+    // Hidden editor row beneath.
+    const editTr = document.createElement('tr');
+    editTr.id = 'gedit-' + g.id;
+    editTr.style.display = 'none';
+    editTr.innerHTML = '<td colspan="5" style="background:#f5f5f5;padding:10px"></td>';
+    tbody.appendChild(editTr);
+  });
+  if (!sorted.length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#808080;padding:12px">' +
+      'No group presets yet. Scroll down to add one.</td></tr>';
+  }
+}
+
+document.addEventListener('click', async (ev) => {
+  const t = ev.target;
+  try {
+    if (t.dataset.delGroup) {
+      if (!confirm('Remove group preset?')) return;
+      await api('DELETE', '/api/groups/' + encodeURIComponent(t.dataset.delGroup));
+      refreshGroups();
+    }
+    if (t.dataset.geditOpen) {
+      const editTr = document.getElementById('gedit-' + t.dataset.geditOpen);
+      if (!editTr) return;
+      if (editTr.style.display !== 'none') {
+        editTr.style.display = 'none';
+        return;
+      }
+      const r = (await api('GET', '/api/groups')).groups;
+      const g = r.find(x => x.id === t.dataset.geditOpen);
+      if (!g) return;
+      const cell = editTr.querySelector('td');
+      const playerOpts = Object.entries(_playerIndex)
+        .map(([pid, label]) =>
+          '<option value="' + esc(pid) + '"' + (pid === g.master ? ' selected' : '') + '>' +
+          esc(label) + '</option>').join('');
+      const memberChips = Object.entries(_playerIndex).map(([pid, label]) => {
+        const on = (g.members || []).includes(pid);
+        return '<label class="member-chip ' + (on ? 'on' : '') + '" data-pid="' + esc(pid) + '">' +
+               '<input type="checkbox" value="' + esc(pid) + '"' + (on ? ' checked' : '') + '>' +
+               esc(label) + '</label>';
+      }).join('');
+      cell.innerHTML =
+        '<div class="row"><label class="muted" style="width:60px">Master:</label>' +
+          '<select data-gemaster="' + esc(g.id) + '" style="max-width:240px">' + playerOpts + '</select></div>' +
+        '<div class="row"><label class="muted" style="width:60px;vertical-align:top">Members:</label>' +
+          '<div class="members-pick" data-gemembers="' + esc(g.id) + '">' + memberChips + '</div></div>' +
+        '<div class="row"><button class="small" data-gsave="' + esc(g.id) + '">Save</button>' +
+          '<button class="small secondary" data-gcancel="' + esc(g.id) + '">Cancel</button></div>';
+      editTr.style.display = '';
+    }
+    if (t.dataset.gcancel) {
+      const editTr = document.getElementById('gedit-' + t.dataset.gcancel);
+      if (editTr) editTr.style.display = 'none';
+    }
+    if (t.dataset.gsave) {
+      const gid = t.dataset.gsave;
+      const editTr = document.getElementById('gedit-' + gid);
+      const master = editTr.querySelector('select[data-gemaster]').value;
+      const members = [...editTr.querySelectorAll('div[data-gemembers] input:checked')].map(i => i.value);
+      await api('PATCH', '/api/groups/' + encodeURIComponent(gid), { master, members });
+      toast('Group saved');
+      editTr.style.display = 'none';
+      refreshGroups();
+    }
+    // Member chip click on the chip itself (when not directly on the checkbox)
+    if (t.classList && t.classList.contains('member-chip')) {
+      const cb = t.querySelector('input[type=checkbox]');
+      if (cb && ev.target.tagName !== 'INPUT') {
+        cb.checked = !cb.checked;
+        t.classList.toggle('on', cb.checked);
+      }
+    }
+    // Member chip checkbox toggle — sync visual
+    if (t.tagName === 'INPUT' && t.type === 'checkbox' && t.closest('.member-chip')) {
+      t.closest('.member-chip').classList.toggle('on', t.checked);
+    }
+  } catch (e) { toast(e.message, true); }
+});
+
+document.getElementById('ng-add').addEventListener('click', async () => {
+  const name = document.getElementById('ng-name').value.trim();
+  const master = document.getElementById('ng-master').value;
+  const members = [...document.querySelectorAll('#ng-members input:checked')].map(i => i.value);
+  if (!name) return toast('Group name required', true);
+  if (!master) return toast('Pick a master player', true);
+  try {
+    await api('POST', '/api/groups', { name, master, members });
+    document.getElementById('ng-name').value = '';
+    document.getElementById('ng-master').value = '';
+    document.querySelectorAll('#ng-members input').forEach(i => {
+      i.checked = false; i.closest('.member-chip').classList.remove('on');
+    });
+    toast('Group preset added');
+    refreshGroups();
+  } catch (e) { toast(e.message, true); }
+});
+
+// Sync group-name inline edits like presets do.
+document.addEventListener('change', async (ev) => {
+  const t = ev.target;
+  if (t.dataset && t.dataset.gedit && t.dataset.field) {
+    try { await api('PATCH', '/api/groups/' + encodeURIComponent(t.dataset.gedit),
+                    { [t.dataset.field]: t.value }); toast('Saved'); }
+    catch (e) { toast(e.message, true); }
+  }
+});
+
 async function refreshAll() {
-  try { await refreshPlayers(); await refreshStations(); await refreshCloud(); await refreshDiag(); }
+  try { await refreshPlayers(); await refreshStations(); await refreshGroups();
+        await refreshCloud(); await refreshDiag(); }
   catch (e) { toast(e.message, true); }
 }
 document.addEventListener('change', async (ev) => {
@@ -1188,6 +1430,8 @@ class _AdminHandler(BaseHTTPRequestHandler):
                 return self._send(200, self.server.admin.api_list_players())
             if path == "/api/stations":
                 return self._send(200, self.server.admin.api_list_stations())
+            if path == "/api/groups":
+                return self._send(200, self.server.admin.api_list_groups())
             if path == "/api/cloud":
                 return self._send(200, self.server.admin.api_get_cloud())
             if path == "/oauth/start":
@@ -1243,6 +1487,8 @@ class _AdminHandler(BaseHTTPRequestHandler):
                 return self._send(200, self.server.admin.api_discover_now())
             if path == "/api/stations":
                 return self._send(200, self.server.admin.api_add_station(body))
+            if path == "/api/groups":
+                return self._send(200, self.server.admin.api_add_group(body))
             self._err(404, "NOT_FOUND", "no such route")
         except ValueError as exc:
             self._err(400, "INVALID_ARG", str(exc))
@@ -1273,6 +1519,9 @@ class _AdminHandler(BaseHTTPRequestHandler):
             m = re.match(r"^/api/stations/(.+)$", path)
             if m:
                 return self._send(200, self.server.admin.api_update_station(urllib.parse.unquote(m.group(1)), body))
+            m = re.match(r"^/api/groups/(.+)$", path)
+            if m:
+                return self._send(200, self.server.admin.api_update_group(urllib.parse.unquote(m.group(1)), body))
             self._err(404, "NOT_FOUND", "no such route")
         except ValueError as exc:
             self._err(400, "INVALID_ARG", str(exc))
@@ -1288,7 +1537,12 @@ class _AdminHandler(BaseHTTPRequestHandler):
             m = re.match(r"^/api/stations/(.+)$", path)
             if m:
                 return self._send(200, self.server.admin.api_remove_station(urllib.parse.unquote(m.group(1))))
+            m = re.match(r"^/api/groups/(.+)$", path)
+            if m:
+                return self._send(200, self.server.admin.api_remove_group(urllib.parse.unquote(m.group(1))))
             self._err(404, "NOT_FOUND", "no such route")
+        except ValueError as exc:
+            self._err(400, "INVALID_ARG", str(exc))
         except Exception as exc:  # noqa: BLE001
             self._err(500, "INTERNAL", str(exc))
 
@@ -1444,13 +1698,16 @@ class LogicModule:
         with _registry_lock:
             np = len(_players)
             ns = len(_stations)
+            ng = len(_groups)
             authed = bool(_cloud.get("accessToken"))
         self.fw.set_output("PlayerCount", float(np))
         self.fw.set_output("StationCount", float(ns))
+        self.fw.set_output("GroupCount", float(ng))
         self.fw.set_output("CloudAuthorized", 1 if authed else 0)
         if self.debug is not None:
             self.debug.set("Players", float(np))
             self.debug.set("Presets", float(ns))
+            self.debug.set("Group presets", float(ng))
             self.debug.set("Cloud authorized", "yes" if authed else "no")
 
     def _publish_counters_async(self):
@@ -1478,6 +1735,7 @@ class LogicModule:
                 "listenPort": self.listener_port,
                 "playerCount": len(_players),
                 "stationCount": len(_stations),
+                "groupCount": len(_groups),
                 "cloudAuthorized": bool(_cloud.get("accessToken")),
                 "lastDiscoveryAt": (time.strftime("%Y-%m-%dT%H:%M:%S",
                                                   time.localtime(self._last_discovery_at))
@@ -1659,6 +1917,75 @@ class LogicModule:
             removed = _stations.pop(sid, None)
         if removed is None:
             raise ValueError("unknown station id")
+        self._publish_counters_async()
+        return {"ok": True}
+
+    # ----- Group presets ---------------------------------------------------
+
+    def api_list_groups(self):
+        with _registry_lock:
+            groups = list(_groups.values())
+        return {
+            "ok": True,
+            "groups": sorted(groups, key=lambda g: g["name"].lower()),
+        }
+
+    def api_add_group(self, body):
+        name = (body.get("name") or "").strip()
+        master = (body.get("master") or "").strip()
+        members_raw = body.get("members") or []
+        if not name:
+            raise ValueError("name required")
+        if not master:
+            raise ValueError("master required")
+        if not isinstance(members_raw, list):
+            raise ValueError("members must be a list of player ids")
+        # Validate every player id exists in the registry, else the group
+        # would be impossible to dispatch. Strip the master from members
+        # automatically (no point sending it x-rincon:<itself>).
+        with _registry_lock:
+            known = set(_players.keys())
+            for pid in [master] + list(members_raw):
+                if pid not in known:
+                    raise ValueError("unknown player id: {}".format(pid))
+            members = [m for m in members_raw if m != master]
+            gid = "g_" + str(int(time.time() * 1000))
+            rec = {"id": gid, "name": name, "master": master, "members": members}
+            _groups[gid] = rec
+        self._publish_counters_async()
+        return {"ok": True, "group": rec}
+
+    def api_update_group(self, gid, body):
+        with _registry_lock:
+            rec = _groups.get(gid)
+            if rec is None:
+                raise ValueError("unknown group id")
+            known = set(_players.keys())
+            if "name" in body:
+                v = (body["name"] or "").strip()
+                if not v:
+                    raise ValueError("name cannot be empty")
+                rec["name"] = v
+            if "master" in body:
+                m = (body["master"] or "").strip()
+                if m and m not in known:
+                    raise ValueError("unknown player id: {}".format(m))
+                rec["master"] = m
+            if "members" in body:
+                v = body["members"] or []
+                if not isinstance(v, list):
+                    raise ValueError("members must be a list")
+                for pid in v:
+                    if pid not in known:
+                        raise ValueError("unknown player id: {}".format(pid))
+                rec["members"] = [m for m in v if m != rec.get("master")]
+        return {"ok": True, "group": rec}
+
+    def api_remove_group(self, gid):
+        with _registry_lock:
+            removed = _groups.pop(gid, None)
+        if removed is None:
+            raise ValueError("unknown group id")
         self._publish_counters_async()
         return {"ok": True}
 

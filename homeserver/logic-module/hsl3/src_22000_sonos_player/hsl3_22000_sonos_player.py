@@ -104,6 +104,17 @@ ENV_SET_URI = (
     "</s:Body></s:Envelope>"
 )
 
+# BecomeCoordinatorOfStandaloneGroup — ungroups the player from whatever
+# zone group it's currently in, making it a standalone coordinator.
+ENV_STANDALONE = (
+    '<?xml version="1.0" encoding="utf-8"?>'
+    '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">'
+    '<s:Body><u:BecomeCoordinatorOfStandaloneGroup xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
+    "<InstanceID>0</InstanceID>"
+    "</u:BecomeCoordinatorOfStandaloneGroup></s:Body></s:Envelope>"
+)
+
+
 # Queue management — needed to play containers (Spotify / Apple Music
 # playlists, Sonos saved queues). For these, SetAVTransportURI with the
 # raw container URI is NOT a valid transport target; Sonos requires:
@@ -181,6 +192,28 @@ def _admin_player_record(spec):
             continue
         if "sonos_admin" in mod_name or "hsl3_22001" in mod_name:
             fn = getattr(mod, "get_player_record", None)
+            if callable(fn):
+                try:
+                    rec = fn(spec)
+                    if rec:
+                        return rec
+                except Exception:
+                    pass
+    return None
+
+
+def _lookup_group_via_admin(spec):
+    """Ask the Admin LBS for a group preset record. Returns a dict
+    {id, name, master, members} or None when Admin isn't loaded or the
+    group doesn't exist. Used by LBS 22000 when its GroupPreset input
+    fires to look up which players form the group."""
+    if spec is None:
+        return None
+    for mod_name, mod in list(sys.modules.items()):
+        if mod is None:
+            continue
+        if "sonos_admin" in mod_name or "hsl3_22001" in mod_name:
+            fn = getattr(mod, "get_group", None)
             if callable(fn):
                 try:
                     rec = fn(spec)
@@ -587,6 +620,20 @@ class LogicModule:
             if name:
                 self._run_control_threaded(lambda: self._action_start_radio(name))
 
+        # Group presets — dispatch by index or name.
+        if inputs["GroupPreset"].changed:
+            idx = int(inputs["GroupPreset"].value or 0)
+            if idx > 0:
+                self._run_control_threaded(lambda: self._action_group_form(idx))
+        if inputs["GroupPresetName"].changed:
+            gname = to_str(inputs["GroupPresetName"].value).strip()
+            if gname:
+                self._run_control_threaded(lambda: self._action_group_form(gname))
+
+        # Ungroup — make THIS player a standalone coordinator.
+        if inputs["Ungroup"].changed and inputs["Ungroup"].value != 0:
+            self._run_control_threaded(self._action_ungroup)
+
         if inputs["Resubscribe"].changed and inputs["Resubscribe"].value != 0:
             self._sid_av = ""
             self._sid_rc = ""
@@ -821,6 +868,64 @@ class LogicModule:
             self.fw.run_in_context(self._write_error, (err or "PLAY_FAILED",))
             return
         self.fw.run_in_context(self._mark_active_station, (spec,))
+
+    # ----- Group preset actions --------------------------------------------
+
+    def _action_group_form(self, spec):
+        """Form a Sonos zone group from a predefined preset. The Admin
+        block holds the master + members list; we resolve every player
+        to an IP and the master to a UUID, then issue
+        SetAVTransportURI(x-rincon:<master-uuid>) on each member. The
+        master needs no action — its current content becomes the group's
+        content. Members joining stop their own playback and mirror the
+        master."""
+        group = _lookup_group_via_admin(spec)
+        if not group:
+            self.fw.run_in_context(self._write_error, ("GROUP_NOT_FOUND: {}".format(spec),))
+            return
+        master_id = group.get("master") or ""
+        members = group.get("members") or []
+        master_rec = _admin_player_record(master_id)
+        if not master_rec:
+            self.fw.run_in_context(self._write_error, ("GROUP_MASTER_UNKNOWN: {}".format(master_id),))
+            return
+        master_uuid = master_rec.get("uuid", "")
+        if not master_uuid:
+            self.fw.run_in_context(self._write_error, ("GROUP_MASTER_NO_UUID",))
+            return
+        join_uri = "x-rincon:{}".format(master_uuid)
+        env_join = ENV_SET_URI.replace("{uri}", _xml_escape(join_uri)).replace("{meta}", "")
+        failed = []
+        for member_id in members:
+            mrec = _admin_player_record(member_id)
+            if not mrec or not mrec.get("ip"):
+                failed.append(member_id)
+                continue
+            # Issue SetAVTransportURI directly on the member by
+            # temporarily swapping our host for the SOAP call.
+            saved_host = self._host
+            try:
+                self._host = mrec["ip"]
+                ok, _b, err = self._soap("AVTransport", "SetAVTransportURI", env_join)
+            finally:
+                self._host = saved_host
+            if not ok:
+                failed.append(member_id)
+        if failed:
+            self.fw.run_in_context(
+                self._write_error,
+                ("GROUP_PARTIAL: {} members not joined".format(len(failed)),),
+            )
+
+    def _action_ungroup(self):
+        """Break THIS player out of whatever zone group it's in. Sonos's
+        BecomeCoordinatorOfStandaloneGroup detaches the player from the
+        current group. If the player is already standalone it's a no-op."""
+        ok, _b, err = self._soap(
+            "AVTransport", "BecomeCoordinatorOfStandaloneGroup", ENV_STANDALONE
+        )
+        if not ok:
+            self.fw.run_in_context(self._write_error, (err or "UNGROUP_FAILED",))
 
     def _action_start_radio(self, spec):
         """Start a station identified either by a positive integer

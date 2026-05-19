@@ -153,6 +153,9 @@ def make_player_inputs(host="10.0.0.1", **overrides):
         "MuteToggle":   StubSlot(0),
         "StartRadio":   StubSlot(0),
         "StartRadioName": StubSlot(""),
+        "GroupPreset":  StubSlot(0),
+        "GroupPresetName": StubSlot(""),
+        "Ungroup":      StubSlot(0),
         "Resubscribe":  StubSlot(0),
         "VolStep":      StubSlot(2),
         "PollInterval": StubSlot(60),
@@ -667,6 +670,72 @@ class TestSonosAdmin(unittest.TestCase):
         with self.mod._registry_lock:
             self.assertEqual(len(self.mod._stations), 0)
 
+    def test_admin_group_crud_and_lookup(self):
+        """Group presets: add, list, get by index, get by name,
+        update master/members, delete. Master is auto-stripped from
+        members on add. Unknown player ids are rejected."""
+        with self.mod._registry_lock:
+            self.mod._players["a"] = {"id": "a", "name": "Living Room",
+                "zoneName": "Living Room", "ip": "10.0.0.10", "mac": "",
+                "uuid": "RINCON_AA", "model": "PLAY:5", "source": "ssdp"}
+            self.mod._players["b"] = {"id": "b", "name": "Kitchen",
+                "zoneName": "Kitchen", "ip": "10.0.0.11", "mac": "",
+                "uuid": "RINCON_BB", "model": "One", "source": "ssdp"}
+            self.mod._players["c"] = {"id": "c", "name": "Bedroom",
+                "zoneName": "Bedroom", "ip": "10.0.0.12", "mac": "",
+                "uuid": "RINCON_CC", "model": "One", "source": "ssdp"}
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+
+        # Unknown player id is rejected.
+        with self.assertRaises(ValueError):
+            lm.api_add_group({"name": "Bad", "master": "missing", "members": []})
+        with self.assertRaises(ValueError):
+            lm.api_add_group({"name": "Bad", "master": "a", "members": ["unknown"]})
+        with self.assertRaises(ValueError):
+            lm.api_add_group({"master": "a"})  # no name
+        with self.assertRaises(ValueError):
+            lm.api_add_group({"name": "G"})    # no master
+
+        # Add — master is removed from members automatically.
+        r = lm.api_add_group({
+            "name": "Whole Home",
+            "master": "a",
+            "members": ["a", "b", "c"],
+        })
+        self.assertEqual(r["group"]["master"], "a")
+        self.assertEqual(sorted(r["group"]["members"]), ["b", "c"])
+        gid = r["group"]["id"]
+
+        # Lookup by index and by name.
+        rec = self.mod.get_group(1)
+        self.assertEqual(rec["name"], "Whole Home")
+        rec = self.mod.get_group("whole home")
+        self.assertEqual(rec["id"], gid)
+        self.assertIsNone(self.mod.get_group("nope"))
+        self.assertIsNone(self.mod.get_group(99))
+
+        # Update master to b, members to {a, c} — must drop b from
+        # members again automatically since it's the new master.
+        lm.api_update_group(gid, {"master": "b", "members": ["a", "b", "c"]})
+        with self.mod._registry_lock:
+            self.assertEqual(self.mod._groups[gid]["master"], "b")
+            self.assertEqual(sorted(self.mod._groups[gid]["members"]), ["a", "c"])
+
+        # Update with unknown player id is rejected.
+        with self.assertRaises(ValueError):
+            lm.api_update_group(gid, {"master": "missing"})
+        with self.assertRaises(ValueError):
+            lm.api_update_group(gid, {"members": ["a", "missing"]})
+
+        # Delete.
+        lm.api_remove_group(gid)
+        with self.assertRaises(ValueError):
+            lm.api_remove_group(gid)
+        with self.mod._registry_lock:
+            self.assertEqual(len(self.mod._groups), 0)
+
     def test_admin_cloud_get_does_not_leak_secret(self):
         fw = StubFramework()
         lm = self.mod.LogicModule(fw)
@@ -728,6 +797,8 @@ class TestPlayerStationFromAdmin(unittest.TestCase):
     def setUp(self):
         with self.admin._registry_lock:
             self.admin._stations.clear()
+            self.admin._groups.clear()
+            self.admin._players.clear()
 
     def test_lookup_station_via_admin_returns_dict_with_metadata(self):
         with self.admin._registry_lock:
@@ -856,6 +927,107 @@ class TestPlayerStationFromAdmin(unittest.TestCase):
         add_envelope = calls[1][2]
         self.assertIn("x-rincon-cpcontainer:1006206cspotify:playlist:abc", add_envelope)
         self.assertIn("spotify metadata", add_envelope)
+
+    def test_group_form_sends_xrincon_to_each_member(self):
+        """GroupPreset on the player triggers SetAVTransportURI with
+        x-rincon:<master-UUID> on every member, leaving the master
+        alone. The action issues one SOAP per member; we capture the
+        host each SOAP went to and verify nothing was sent to the
+        master."""
+        # Seed Admin with three players and a group.
+        with self.admin._registry_lock:
+            self.admin._players.clear()
+            self.admin._groups.clear()
+            for pid, ip, uuid in (("a", "10.0.0.10", "RINCON_AA"),
+                                  ("b", "10.0.0.11", "RINCON_BB"),
+                                  ("c", "10.0.0.12", "RINCON_CC")):
+                self.admin._players[pid] = {
+                    "id": pid, "name": pid, "zoneName": pid.upper(),
+                    "ip": ip, "mac": "", "uuid": uuid, "model": "",
+                    "source": "ssdp",
+                }
+            self.admin._groups["g1"] = {
+                "id": "g1", "name": "All", "master": "a", "members": ["b", "c"],
+            }
+
+        fw = StubFramework()
+        lm = self.player.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        # The trigger player can be ANY of them — doesn't matter; the
+        # action loops over Admin's member list.
+        lm._host_spec = "RINCON_BB"
+        lm._host = "10.0.0.11"
+
+        calls = []
+        def fake_soap(service, action, envelope):
+            # Capture (current self._host, action, payload-substring).
+            calls.append((lm._host, action, envelope))
+            return (True, "", "")
+        lm._soap = fake_soap
+
+        lm._action_group_form(1)  # Form by index
+
+        # Each member got exactly one SetAVTransportURI; master did not.
+        member_hosts = {h for (h, a, _) in calls if a == "SetAVTransportURI"}
+        self.assertEqual(member_hosts, {"10.0.0.11", "10.0.0.12"})
+        self.assertNotIn("10.0.0.10", member_hosts)
+        # Every payload references the master's RINCON UUID via x-rincon:.
+        for _h, _a, env in calls:
+            self.assertIn("x-rincon:RINCON_AA", env)
+
+    def test_group_form_partial_failure_reports_error(self):
+        """When some members can't be joined (resolve fails or SOAP
+        returns an error) the action reports GROUP_PARTIAL in
+        LastError but doesn't crash the worker."""
+        with self.admin._registry_lock:
+            self.admin._players.clear()
+            self.admin._groups.clear()
+            # Master present, one member present, one member missing.
+            self.admin._players["m"] = {"id": "m", "name": "M",
+                "zoneName": "Master", "ip": "10.0.0.1", "mac": "",
+                "uuid": "RINCON_M", "model": "", "source": "ssdp"}
+            self.admin._players["x"] = {"id": "x", "name": "X",
+                "zoneName": "Slave", "ip": "10.0.0.2", "mac": "",
+                "uuid": "RINCON_X", "model": "", "source": "ssdp"}
+            # Members include 'ghost' which isn't in the registry —
+            # api_add_group would normally block this, but the Admin
+            # could be edited in-place too; defensive check needed.
+            self.admin._groups["g"] = {
+                "id": "g", "name": "G", "master": "m", "members": ["x", "ghost"],
+            }
+        fw = StubFramework()
+        lm = self.player.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._host = "10.0.0.1"
+        lm._soap = lambda *a, **kw: (True, "", "")
+        lm._action_group_form("G")
+        self.assertIn(b"GROUP_PARTIAL", fw.outputs.get("LastError", b""))
+
+    def test_ungroup_sends_become_standalone(self):
+        """Ungroup triggers BecomeCoordinatorOfStandaloneGroup on the
+        player itself (not on any other player)."""
+        fw = StubFramework()
+        lm = self.player.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._host = "10.0.0.99"
+        actions = []
+        lm._soap = lambda s, a, e: (actions.append(a) or (True, "", ""))
+        lm._action_ungroup()
+        self.assertEqual(actions, ["BecomeCoordinatorOfStandaloneGroup"])
+
+    def test_lookup_group_via_admin_returns_record(self):
+        with self.admin._registry_lock:
+            self.admin._players["a"] = {"id": "a", "name": "A", "zoneName": "A",
+                "ip": "1.1.1.1", "mac": "", "uuid": "U_A", "model": "",
+                "source": "ssdp"}
+            self.admin._groups["g"] = {
+                "id": "g", "name": "Test Group", "master": "a", "members": [],
+            }
+        rec = self.player._lookup_group_via_admin(1)
+        self.assertEqual(rec["name"], "Test Group")
+        rec = self.player._lookup_group_via_admin("test group")
+        self.assertEqual(rec["master"], "a")
+        self.assertIsNone(self.player._lookup_group_via_admin("nothing"))
 
     def test_play_via_queue_aborts_without_uuid(self):
         fw = StubFramework()
