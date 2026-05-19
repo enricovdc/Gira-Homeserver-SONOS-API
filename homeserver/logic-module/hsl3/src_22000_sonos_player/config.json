@@ -1,0 +1,104 @@
+{
+  "module": {
+    "id": "22000",
+    "context": "sonos.bridge",
+    "category": "Multimedia\\Sonos",
+    "name": "Sonos Player",
+    "version": "1.0.0",
+    "hsl_filename": "22000_sonos_player.hsl",
+    "inputs": [
+      { "type": "string", "identifier": "Host",          "init_value": "",  "label": "Player Host (IP)" },
+      { "type": "number", "identifier": "Play",          "init_value": 0,   "label": "Play" },
+      { "type": "number", "identifier": "Pause",         "init_value": 0,   "label": "Pause" },
+      { "type": "number", "identifier": "Stop",          "init_value": 0,   "label": "Stop" },
+      { "type": "number", "identifier": "Next",          "init_value": 0,   "label": "Next Track" },
+      { "type": "number", "identifier": "Prev",          "init_value": 0,   "label": "Previous Track" },
+      { "type": "number", "identifier": "SetVolume",     "init_value": 0,   "label": "Set Volume 0-100" },
+      { "type": "number", "identifier": "VolUp",         "init_value": 0,   "label": "Volume Up" },
+      { "type": "number", "identifier": "VolDown",       "init_value": 0,   "label": "Volume Down" },
+      { "type": "number", "identifier": "SetMute",       "init_value": 0,   "label": "Set Mute" },
+      { "type": "number", "identifier": "MuteToggle",    "init_value": 0,   "label": "Toggle Mute" },
+      { "type": "number", "identifier": "StartRadio",    "init_value": 0,   "label": "Start Radio Station Index 1-8" },
+      { "type": "number", "identifier": "Resubscribe",   "init_value": 0,   "label": "Force Re-subscribe" },
+      { "type": "number", "identifier": "VolStep",       "init_value": 2,   "label": "Volume Up Down Step" },
+      { "type": "number", "identifier": "PollInterval",  "init_value": 60,  "label": "Status Poll Interval seconds" },
+      { "type": "number", "identifier": "SubTimeout",    "init_value": 1800,"label": "UPnP Subscription Timeout seconds" },
+      { "type": "number", "identifier": "HttpTimeout",   "init_value": 5,   "label": "HTTP Timeout seconds" },
+      { "type": "string", "identifier": "CallbackBase",  "init_value": "",  "label": "Callback Base URL leave empty for auto" },
+      { "type": "string", "identifier": "Station1Uri",   "init_value": "",  "label": "Radio Station 1 Stream URI" },
+      { "type": "string", "identifier": "Station2Uri",   "init_value": "",  "label": "Radio Station 2 Stream URI" },
+      { "type": "string", "identifier": "Station3Uri",   "init_value": "",  "label": "Radio Station 3 Stream URI" },
+      { "type": "string", "identifier": "Station4Uri",   "init_value": "",  "label": "Radio Station 4 Stream URI" },
+      { "type": "string", "identifier": "Station5Uri",   "init_value": "",  "label": "Radio Station 5 Stream URI" },
+      { "type": "string", "identifier": "Station6Uri",   "init_value": "",  "label": "Radio Station 6 Stream URI" },
+      { "type": "string", "identifier": "Station7Uri",   "init_value": "",  "label": "Radio Station 7 Stream URI" },
+      { "type": "string", "identifier": "Station8Uri",   "init_value": "",  "label": "Radio Station 8 Stream URI" }
+    ],
+    "outputs": [
+      { "type": "number", "identifier": "Online",        "init_value": 0,  "label": "Online" },
+      { "type": "string", "identifier": "State",         "init_value": "", "label": "Playback State" },
+      { "type": "number", "identifier": "Volume",        "init_value": 0,  "label": "Volume 0-100" },
+      { "type": "number", "identifier": "Mute",          "init_value": 0,  "label": "Mute" },
+      { "type": "string", "identifier": "Title",         "init_value": "", "label": "Track Title or Stream Content" },
+      { "type": "string", "identifier": "Artist",        "init_value": "", "label": "Artist" },
+      { "type": "number", "identifier": "ActiveStation", "init_value": 0,  "label": "Active Radio Station Index" },
+      { "type": "string", "identifier": "LastError",     "init_value": "", "label": "Last Error" },
+      { "type": "number", "identifier": "Subscribed",    "init_value": 0,  "label": "UPnP Subscribed" }
+    ],
+    "store": [
+      { "type": "number", "identifier": "Reserved", "init_value": 0 }
+    ],
+    "timer": [
+      { "identifier": "Tick" }
+    ],
+    "scripts": [
+      { "filename": "hsl3_22000_sonos_player.py" }
+    ],
+    "translations": [
+      {
+        "language": "de",
+        "name": "Sonos Player",
+        "category": "Multimedia\\Sonos",
+        "translation_inputs": [
+          { "label": "Player Host IP" },
+          { "label": "Wiedergabe starten" },
+          { "label": "Pause" },
+          { "label": "Stopp" },
+          { "label": "Naechster Titel" },
+          { "label": "Vorheriger Titel" },
+          { "label": "Lautstaerke setzen 0-100" },
+          { "label": "Lauter" },
+          { "label": "Leiser" },
+          { "label": "Stummschaltung setzen" },
+          { "label": "Stummschaltung umschalten" },
+          { "label": "Radiosender Index 1-8 starten" },
+          { "label": "Erneut abonnieren" },
+          { "label": "Lautstaerke-Schritt" },
+          { "label": "Status-Abfrageintervall Sekunden" },
+          { "label": "UPnP Abonnement Timeout Sekunden" },
+          { "label": "HTTP-Timeout Sekunden" },
+          { "label": "Callback-Basis-URL leer fuer Auto" },
+          { "label": "Radiosender 1 Stream-URI" },
+          { "label": "Radiosender 2 Stream-URI" },
+          { "label": "Radiosender 3 Stream-URI" },
+          { "label": "Radiosender 4 Stream-URI" },
+          { "label": "Radiosender 5 Stream-URI" },
+          { "label": "Radiosender 6 Stream-URI" },
+          { "label": "Radiosender 7 Stream-URI" },
+          { "label": "Radiosender 8 Stream-URI" }
+        ],
+        "translation_outputs": [
+          { "label": "Online" },
+          { "label": "Wiedergabestatus" },
+          { "label": "Lautstaerke 0-100" },
+          { "label": "Stumm" },
+          { "label": "Titel oder Stream-Inhalt" },
+          { "label": "Interpret" },
+          { "label": "Aktive Radiosender-Nummer" },
+          { "label": "Letzter Fehler" },
+          { "label": "UPnP Abonniert" }
+        ]
+      }
+    ]
+  }
+}

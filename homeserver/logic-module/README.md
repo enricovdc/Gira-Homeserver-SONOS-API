@@ -1,52 +1,34 @@
-# Gira HomeServer logic modules
+# Gira HomeServer logic module
 
-The canonical deliverable for this project: **native HSL3 logic modules**
-that run inside the Gira HomeServer's own logic engine. No external
-service, no SSH, no companion machine. Import the `.hslz` archive in
-the HS Experte and you have working Sonos control.
+Native HSL3 logic modules that run inside the HomeServer's own logic
+engine. Two LBS blocks (Sonos Player + Sonos Discover) plus the SOAP
+envelope reference embedded in their Python source.
 
-## What's here
+## Layout
 
 ```
-homeserver/logic-module/
-├── hsl3/        Native HSL3 / Python 3.9 LogicModule sources.
-│                Two LBS modules: 22000 Sonos Player, 22001 Sonos Discover.
-│                Run `build/build_hslz.py` to package as .hslz for Experte import.
-│                See hsl3/README.md for details.
-│
-└── soap/        Raw SOAP envelope templates used inside the HSL3 Python.
-                 Kept here as a documentation cross-reference so the
-                 integrator can verify what wire-format the modules send.
-                 Not used directly in Experte — the .py file embeds them.
+hsl3/        HSL3 / Python 3.9 LogicModule sources, configs, help, build tooling.
+             Run build/build_hslz.py to package .hslz archives for Experte import.
+             See hsl3/README.md for the full reference.
+
+soap/        Raw SOAP envelope templates (XML) and NOTIFY regex patterns,
+             kept as a wire-format reference. Not used directly in Experte —
+             the same envelopes are embedded as string constants in
+             hsl3/src_22000_sonos_player/hsl3_22000_sonos_player.py.
+             Useful when verifying behaviour against a different Sonos
+             firmware or when porting the integration to another platform.
 ```
 
-The `.hsl` files are the deliverable; the `.py` files in
-`hsl3/src_*` are the source that the Gira HSL3 generator compiles into
-those `.hsl` files. See `hsl3/README.md` for the build and import flow.
-
-## Quick start
+## Build, test, import
 
 ```sh
-# 1. Build the HSLZ archives
-python3 homeserver/logic-module/hsl3/build/build_hslz.py
+# 1. Build the .hslz archives (run on a machine with the Gira HSL3 generator)
+python3 hsl3/build/build_hslz.py
 
-# 2. In Experte: Logikbausteine → Importieren →
-#    select hsl3/build/dist/22000_sonos_player.hslz and 22001_sonos_discover.hslz
+# 2. Run the test suite (no HomeServer required)
+python3 hsl3/build/test_logic_modules.py
 
-# 3. Drag a Sonos Player block onto the logic canvas, set Host to the
-#    player's IP, wire inputs/outputs to KNX. Done.
+# 3. In Experte: Logikbausteine → Importieren → select the two .hslz files
 ```
 
-## What the HSL3 modules do
-
-- Control Sonos players (play/pause/stop/next/prev, volume, mute, mute toggle).
-- Eight configurable radio stations per player; firmware-2026-resilient
-  metadata-free direct-broadcast playback with automatic fallback.
-- Status outputs (Online, State, Volume, Mute, Title, Artist,
-  ActiveStation, LastError, Subscribed) updated in ~1 second via UPnP
-  event push (NOTIFY callback on TCP 8081 inside the HomeServer), with
-  status-poll fallback on a `Tick` timer for resilience.
-- Optional SSDP discovery to find players on the LAN at commissioning.
-
-See `hsl3/README.md` for the full input/output specification and
-KNX-mapping guidance.
+Full details: [hsl3/README.md](hsl3/README.md).

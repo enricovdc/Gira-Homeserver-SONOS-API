@@ -177,16 +177,14 @@ output changing.
      DPTs (see `homeserver/KNX-MAPPING.md` in the parent directory).
 5. Download to the HomeServer.
 
-## When to use this versus the Node.js bridge
+## Troubleshooting
 
-- **HSL3 modules (this directory)**: zero external services, pure
-  HomeServer install, lowest operational complexity. Recommended.
-- **Node.js bridge** (`src/` at the repo root): only useful if you
-  need the standalone web admin UI, or if you have a fleet of Sonos
-  players that benefits from running the bridge on a separate
-  always-on Linux box.
-
-The HSL3 modules are now the canonical deliverable for this
-integration. The bridge stays in the repo as a reference
-implementation and for environments where the HomeServer doesn't have
-HSL3 (firmware < 4.13).
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `LastError = UNREACHABLE` | Player offline or wrong IP | Check the Sonos app for the player's current IP; run *Sonos Discover* if it changed. |
+| `LastError = HTTP_<code>` | Sonos returned an unexpected HTTP status | Look at the player's debug page in Experte and any SOAP fault code; check that the player isn't a stereo-pair member (control the coordinator instead). |
+| `Subscribed = 0` permanently | NOTIFY listener didn't bind (port 8081 unavailable, firewall) | The module falls back to polling automatically. Check the *Listener port* field on the debug page; if it shows `disabled`, free up the port or accept polling-only operation. |
+| Outputs not updating in KNX | Wiring missing in Experte or KNX bus down | Confirm the LBS output is wired to a KNX group address; check `Online`/`State` change in the Experte debug view. |
+| `LastError = STATION_N_NOT_CONFIGURED` | Station N's `StationNUri` input is empty | Set the URI (use the player's own stream URL from the Sonos app's "Information" panel). |
+| Subscriptions drop after 30 min | `Tick` timer not firing or `SubTimeout` < 60 s | Ensure `PollInterval` >= 10 and `SubTimeout` >= 60. Default values are safe. |
+| New firmware breaks playback | A future Sonos firmware update could change SOAP behaviour | The fallback ladder in `_action_start_radio` handles known metadata-rejection codes (714, 716, 800). Open an issue with the new `errorCode` from the player's response. |

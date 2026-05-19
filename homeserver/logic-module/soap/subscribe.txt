@@ -2,13 +2,11 @@ UPnP eventing — raw SUBSCRIBE / RENEW / UNSUBSCRIBE requests
 ============================================================
 
 These are NOT SOAP envelopes — they are HTTP requests with a custom method
-(`SUBSCRIBE` or `UNSUBSCRIBE`) and no body. Configure them in HS Experte as
-"HTTP-Request senden" actions with the appropriate method set in the
-advanced HTTP options.
-
-If your Experte version does not support custom HTTP methods on outbound
-requests, fall back to status polling (Step 6 in INSTALL.md). All other
-features still work; you just lose push notification.
+(`SUBSCRIBE` or `UNSUBSCRIBE`) and no body. This file documents the wire
+format used by the LBS 22000 Sonos Player module's internal subscription
+logic (see _subscribe_or_renew in hsl3_22000_sonos_player.py). It is
+useful as a reference if you ever need to inspect raw traffic with
+tcpdump or implement the same flow elsewhere.
 
 ----------------------------------------------------------------
 1) Initial SUBSCRIBE — AVTransport
