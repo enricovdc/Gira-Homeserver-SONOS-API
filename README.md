@@ -70,28 +70,17 @@ simple responses. This project provides:
 
 ## Install modes
 
-Three modes, in order of "user effort to install":
-
 | Mode | What you import | Effort | Features |
 | --- | --- | --- | --- |
-| **A. Experte-only bridge install** | HS Experte project containing `dist/sonos-bridge.bundle.js` + `start-bridge.sh` | Import the project, click *Download to HomeServer*. Done. | Full bridge: web admin UI, SSDP discovery, UPnP events, webhook push |
-| **B. Pure HSL logic module** | Same Experte project, **no** Node bundle | Set up data points + actions + receive parsers as documented | Core control, radio, status, UPnP events; no SSDP, no web admin |
-| **C. SSH systemd install** | This git repo on the HomeServer | `git clone` + `homeserver/install/install.sh` | Full bridge, hardened systemd unit, journal logs |
+| **A. HSL3 LBS modules** (recommended) | `22000_sonos_player.hslz` + `22001_sonos_discover.hslz` | Import in Experte. No SSH, no companion machine. | Full integration: control, radio, status, UPnP event push, SSDP discovery |
+| **B. Node.js bridge on the HomeServer** (legacy) | This repo + `install.sh` over SSH | Run installer once on the HS Linux | Same features as A, plus a standalone web admin UI |
 
-Mode A is the recommended path for most integrators because it requires
-**no SSH access** to the HomeServer — the Experte project ships the
-self-contained Node bundle and a startup script, and the HomeServer
-deploys + auto-launches the bridge as part of the normal project
-download. See
-[homeserver/logic-module/bridge-bootstrap/README.md](homeserver/logic-module/bridge-bootstrap/README.md).
+Mode A is the canonical path. Two native HSL3 / Python 3.9 logic modules
+that run inside the HomeServer's own logic engine on firmware 4.13+. See
+[homeserver/logic-module/hsl3/README.md](homeserver/logic-module/hsl3/README.md).
 
-Mode B is the fallback when the HomeServer firmware lacks the
-deployment primitives that Mode A uses (file write from logic +
-external command execution). See
-[homeserver/logic-module/INSTALL.md](homeserver/logic-module/INSTALL.md).
-
-Mode C is the traditional "install a service on a Linux box" path,
-documented in case you prefer it.
+Mode B remains for HomeServer firmware <4.13 or for users who specifically
+want the bridge's web admin UI. See `homeserver/install/install.sh`.
 
 ## Mode C — SSH systemd install
 

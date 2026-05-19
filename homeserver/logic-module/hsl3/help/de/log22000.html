@@ -1,0 +1,106 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN">
+<html>
+<head>
+<link rel="stylesheet" href="../style.css">
+<title>Logik - Sonos Player</title>
+<style>body { background: none; }</style>
+<meta http-equiv="Content-Type" content="text/html;charset=utf-8">
+</head>
+<body>
+<div class="top-title">Sonos Player</div>
+<div class="nav">
+  <a href="javascript:history.back()">Zurueck</a> /
+  <a href="javascript:history.forward()">Weiter</a> |
+  <a href="hlpsearch.html">Suche</a> |
+  <a href="index.html">Hilfe</a> /
+  <a href="logic.html">Logik</a> / Sonos Player
+</div>
+
+<div class="index">
+  <div class="index-title"><a id="doc_index_1_"></a>Inhalt</div>
+  <div class="t-line"><div class="t-chapter"><a href="#auto_index_anchor_1_">1.</a></div><div class="t-text"><a href="#auto_index_anchor_1_">Beschreibung</a></div></div>
+  <div class="t-line"><div class="t-chapter"><a href="#auto_index_anchor_2_">2.</a></div><div class="t-text"><a href="#auto_index_anchor_2_">Eingaenge</a></div></div>
+  <div class="t-line"><div class="t-chapter"><a href="#auto_index_anchor_3_">3.</a></div><div class="t-text"><a href="#auto_index_anchor_3_">Ausgaenge</a></div></div>
+  <div class="t-line"><div class="t-chapter"><a href="#auto_index_anchor_4_">4.</a></div><div class="t-text"><a href="#auto_index_anchor_4_">Sonstiges</a></div></div>
+</div>
+
+<div class="content">
+
+<div class="topic">
+  <h2 class="t-line"><a id="auto_index_anchor_1_"></a><span class="t-chapter">1.</span><span class="t-text">Beschreibung</span></h2>
+  <div class="descr">
+    Steuert einen einzelnen Sonos Player ueber das lokale Netzwerk mittels der UPnP und SOAP API auf Port 1400. Bietet Wiedergabesteuerung (Play, Pause, Stop, Naechster, Vorheriger), Lautstaerke und Stummschaltung, acht konfigurierbare Radiosender, Statusausgaenge (Zustand, Lautstaerke, Stumm, Titel, Interpret, aktiver Sender) und Live UPnP Event Push so dass Statusausgaben ohne Polling aktualisiert werden.
+  </div>
+  <div class="descr">
+    Kompatibel mit aktueller und 2026er Sonos Firmware. Der Radiosenderstart verwendet leere DIDL-Lite Metadaten und das x-rincon-mp3radio Direkt-Broadcast-Schema mit automatischem Fallback bei Ablehnung.
+  </div>
+  <div class="alert-box ibox-warn">
+    <div class="box-title">Wichtig</div>
+    <div class="box-text"><div class="descr">
+      Der Baustein oeffnet einen TCP Listener auf Port 8081 (oder dem naechsten freien Port bis 8083) fuer den Empfang von UPnP NOTIFY Callbacks. Der HomeServer muss diesen Port am LAN Interface erlauben. Bei Fehlschlag schaltet der Baustein auf Timer-basiertes Status-Polling um und funktioniert weiterhin.
+    </div></div>
+  </div>
+  <div class="alert-box ibox-hint">
+    <div class="box-title">Hinweis</div>
+    <div class="box-text"><div class="descr">
+      Fuegen Sie eine Instanz pro Sonos Player hinzu. Jede Instanz benoetigt einen eindeutigen Host. Alle Instanzen teilen sich einen NOTIFY Listener Thread.
+    </div></div>
+  </div>
+</div>
+
+<div class="topic">
+  <h2 class="t-line"><a id="auto_index_anchor_2_"></a><span class="t-chapter">2.</span><span class="t-text">Eingaenge</span></h2>
+  <table class="table-in">
+    <tr><td class="io-nr center">E#</td><td class="io-name">Name</td><td class="io-init center">Init</td><td class="io-descr">Beschreibung</td></tr>
+    <tr><td class="io-nr input center">E1</td><td class="io-name">Host</td><td class="io-init string center"></td><td class="io-descr">Player LAN IP Adresse. Pflichtfeld.</td></tr>
+    <tr><td class="io-nr input center">E2</td><td class="io-name">Play</td><td class="io-init center">0</td><td class="io-descr">Steigende Flanke startet oder setzt Wiedergabe fort.</td></tr>
+    <tr><td class="io-nr input center">E3</td><td class="io-name">Pause</td><td class="io-init center">0</td><td class="io-descr">Steigende Flanke pausiert.</td></tr>
+    <tr><td class="io-nr input center">E4</td><td class="io-name">Stop</td><td class="io-init center">0</td><td class="io-descr">Steigende Flanke stoppt.</td></tr>
+    <tr><td class="io-nr input center">E5</td><td class="io-name">Next</td><td class="io-init center">0</td><td class="io-descr">Naechster Titel.</td></tr>
+    <tr><td class="io-nr input center">E6</td><td class="io-name">Prev</td><td class="io-init center">0</td><td class="io-descr">Vorheriger Titel.</td></tr>
+    <tr><td class="io-nr input center">E7</td><td class="io-name">SetVolume</td><td class="io-init center">0</td><td class="io-descr">Absolute Lautstaerke 0 bis 100.</td></tr>
+    <tr><td class="io-nr input center">E8</td><td class="io-name">VolUp</td><td class="io-init center">0</td><td class="io-descr">Lauter um VolStep.</td></tr>
+    <tr><td class="io-nr input center">E9</td><td class="io-name">VolDown</td><td class="io-init center">0</td><td class="io-descr">Leiser um VolStep.</td></tr>
+    <tr><td class="io-nr input center">E10</td><td class="io-name">SetMute</td><td class="io-init center">0</td><td class="io-descr">0 unmute, nicht 0 mute.</td></tr>
+    <tr><td class="io-nr input center">E11</td><td class="io-name">MuteToggle</td><td class="io-init center">0</td><td class="io-descr">Schaltet Stummschaltung um.</td></tr>
+    <tr><td class="io-nr input center">E12</td><td class="io-name">StartRadio</td><td class="io-init center">0</td><td class="io-descr">Senderindex 1 bis 8 startet diesen Sender.</td></tr>
+    <tr><td class="io-nr input center">E13</td><td class="io-name">Resubscribe</td><td class="io-init center">0</td><td class="io-descr">Erneuert die UPnP Abonnements.</td></tr>
+    <tr><td class="io-nr input center">E14</td><td class="io-name">VolStep</td><td class="io-init center">2</td><td class="io-descr">Schrittweite fuer VolUp und VolDown.</td></tr>
+    <tr><td class="io-nr input center">E15</td><td class="io-name">PollInterval</td><td class="io-init center">60</td><td class="io-descr">Status-Abfrageintervall in Sekunden.</td></tr>
+    <tr><td class="io-nr input center">E16</td><td class="io-name">SubTimeout</td><td class="io-init center">1800</td><td class="io-descr">UPnP Abonnement Timeout.</td></tr>
+    <tr><td class="io-nr input center">E17</td><td class="io-name">HttpTimeout</td><td class="io-init center">5</td><td class="io-descr">HTTP Anfrage Timeout in Sekunden.</td></tr>
+    <tr><td class="io-nr input center">E18</td><td class="io-name">CallbackBase</td><td class="io-init string center"></td><td class="io-descr">Callback Basis URL. Leer fuer automatische Erkennung.</td></tr>
+    <tr><td class="io-nr input center">E19..E26</td><td class="io-name">Station1Uri..Station8Uri</td><td class="io-init string center"></td><td class="io-descr">Stream URIs fuer Radiosender 1 bis 8.</td></tr>
+  </table>
+</div>
+
+<div class="topic">
+  <h2 class="t-line"><a id="auto_index_anchor_3_"></a><span class="t-chapter">3.</span><span class="t-text">Ausgaenge</span></h2>
+  <table class="table-out">
+    <tr><td class="io-nr center">A#</td><td class="io-name">Name</td><td class="io-init center">Init</td><td class="o-sbc center">SBC</td><td class="io-descr">Beschreibung</td></tr>
+    <tr><td class="io-nr output center">A1</td><td class="io-name">Online</td><td class="io-init center">0</td><td class="o-sbc center">ja</td><td class="io-descr">1 wenn der Player kuerzlich antwortete.</td></tr>
+    <tr><td class="io-nr output center">A2</td><td class="io-name">State</td><td class="io-init string center"></td><td class="o-sbc center">ja</td><td class="io-descr">Wiedergabestatus.</td></tr>
+    <tr><td class="io-nr output center">A3</td><td class="io-name">Volume</td><td class="io-init center">0</td><td class="o-sbc center">ja</td><td class="io-descr">Aktuelle Lautstaerke.</td></tr>
+    <tr><td class="io-nr output center">A4</td><td class="io-name">Mute</td><td class="io-init center">0</td><td class="o-sbc center">ja</td><td class="io-descr">Stummschaltung.</td></tr>
+    <tr><td class="io-nr output center">A5</td><td class="io-name">Title</td><td class="io-init string center"></td><td class="o-sbc center">ja</td><td class="io-descr">Titel oder Stream-Inhalt.</td></tr>
+    <tr><td class="io-nr output center">A6</td><td class="io-name">Artist</td><td class="io-init string center"></td><td class="o-sbc center">ja</td><td class="io-descr">Interpret.</td></tr>
+    <tr><td class="io-nr output center">A7</td><td class="io-name">ActiveStation</td><td class="io-init center">0</td><td class="o-sbc center">ja</td><td class="io-descr">Aktive Radiosender-Nummer.</td></tr>
+    <tr><td class="io-nr output center">A8</td><td class="io-name">LastError</td><td class="io-init string center"></td><td class="o-sbc center">ja</td><td class="io-descr">Letzter Fehlercode.</td></tr>
+    <tr><td class="io-nr output center">A9</td><td class="io-name">Subscribed</td><td class="io-init center">0</td><td class="o-sbc center">ja</td><td class="io-descr">1 wenn beide UPnP Abonnements aktiv sind.</td></tr>
+  </table>
+</div>
+
+<div class="topic">
+  <h2 class="t-line"><a id="auto_index_anchor_4_"></a><span class="t-chapter">4.</span><span class="t-text">Sonstiges</span></h2>
+  <table class="table-logic-info">
+    <tr><td>LBS</td><td>22000</td></tr>
+    <tr><td>Version</td><td>1.0.0</td></tr>
+    <tr><td>Firmware</td><td>HSL3, HS 4.13 oder neuer</td></tr>
+    <tr><td>Externe Bibliotheken</td><td>requests (gebuendelt)</td></tr>
+    <tr><td>Netzwerk</td><td>TCP 8081 eingehend fuer NOTIFY, TCP 1400 ausgehend zum Player</td></tr>
+  </table>
+</div>
+
+</div>
+</body>
+</html>

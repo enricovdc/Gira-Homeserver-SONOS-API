@@ -1,0 +1,73 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN">
+<html>
+<head>
+<link rel="stylesheet" href="../style.css">
+<title>Logik - Sonos Suche</title>
+<style>body { background: none; }</style>
+<meta http-equiv="Content-Type" content="text/html;charset=utf-8">
+</head>
+<body>
+<div class="top-title">Sonos Suche</div>
+<div class="nav">
+  <a href="javascript:history.back()">Zurueck</a> /
+  <a href="javascript:history.forward()">Weiter</a> |
+  <a href="hlpsearch.html">Suche</a> |
+  <a href="index.html">Hilfe</a> /
+  <a href="logic.html">Logik</a> / Sonos Suche
+</div>
+
+<div class="index">
+  <div class="index-title"><a id="doc_index_1_"></a>Inhalt</div>
+  <div class="t-line"><div class="t-chapter"><a href="#auto_index_anchor_1_">1.</a></div><div class="t-text"><a href="#auto_index_anchor_1_">Beschreibung</a></div></div>
+  <div class="t-line"><div class="t-chapter"><a href="#auto_index_anchor_2_">2.</a></div><div class="t-text"><a href="#auto_index_anchor_2_">Eingaenge</a></div></div>
+  <div class="t-line"><div class="t-chapter"><a href="#auto_index_anchor_3_">3.</a></div><div class="t-text"><a href="#auto_index_anchor_3_">Ausgaenge</a></div></div>
+  <div class="t-line"><div class="t-chapter"><a href="#auto_index_anchor_4_">4.</a></div><div class="t-text"><a href="#auto_index_anchor_4_">Sonstiges</a></div></div>
+</div>
+
+<div class="content">
+
+<div class="topic">
+  <h2 class="t-line"><a id="auto_index_anchor_1_"></a><span class="t-chapter">1.</span><span class="t-text">Beschreibung</span></h2>
+  <div class="descr">
+    Fuehrt eine SSDP M-SEARCH im lokalen Netzwerk aus und sucht alle vom HomeServer erreichbaren Sonos Player. Liefert eine zeilenweise Liste am Result Ausgang im Format ip;uuid;model.
+  </div>
+  <div class="alert-box ibox-hint">
+    <div class="box-title">Hinweis</div>
+    <div class="box-text"><div class="descr">
+      Verwenden Sie diesen Baustein einmalig zur Inbetriebnahme um das Host Feld jedes Sonos Player Bausteins zu fuellen. SSDP funktioniert nur in derselben Broadcast-Domain.
+    </div></div>
+  </div>
+</div>
+
+<div class="topic">
+  <h2 class="t-line"><a id="auto_index_anchor_2_"></a><span class="t-chapter">2.</span><span class="t-text">Eingaenge</span></h2>
+  <table class="table-in">
+    <tr><td class="io-nr center">E#</td><td class="io-name">Name</td><td class="io-init center">Init</td><td class="io-descr">Beschreibung</td></tr>
+    <tr><td class="io-nr input center">E1</td><td class="io-name">Trigger</td><td class="io-init center">0</td><td class="io-descr">Startet einen SSDP Suchlauf.</td></tr>
+    <tr><td class="io-nr input center">E2</td><td class="io-name">Timeout</td><td class="io-init center">4</td><td class="io-descr">Wartezeit in Sekunden.</td></tr>
+  </table>
+</div>
+
+<div class="topic">
+  <h2 class="t-line"><a id="auto_index_anchor_3_"></a><span class="t-chapter">3.</span><span class="t-text">Ausgaenge</span></h2>
+  <table class="table-out">
+    <tr><td class="io-nr center">A#</td><td class="io-name">Name</td><td class="io-init center">Init</td><td class="o-sbc center">SBC</td><td class="io-descr">Beschreibung</td></tr>
+    <tr><td class="io-nr output center">A1</td><td class="io-name">Result</td><td class="io-init string center"></td><td class="o-sbc center">ja</td><td class="io-descr">Zeilenweise Liste ip;uuid;model.</td></tr>
+    <tr><td class="io-nr output center">A2</td><td class="io-name">Count</td><td class="io-init center">0</td><td class="o-sbc center">ja</td><td class="io-descr">Anzahl gefundener Geraete.</td></tr>
+    <tr><td class="io-nr output center">A3</td><td class="io-name">Error</td><td class="io-init string center"></td><td class="o-sbc center">ja</td><td class="io-descr">Letzte Fehlermeldung.</td></tr>
+  </table>
+</div>
+
+<div class="topic">
+  <h2 class="t-line"><a id="auto_index_anchor_4_"></a><span class="t-chapter">4.</span><span class="t-text">Sonstiges</span></h2>
+  <table class="table-logic-info">
+    <tr><td>LBS</td><td>22001</td></tr>
+    <tr><td>Version</td><td>1.0.0</td></tr>
+    <tr><td>Firmware</td><td>HSL3, HS 4.13 oder neuer</td></tr>
+    <tr><td>Netzwerk</td><td>UDP 1900 Multicast</td></tr>
+  </table>
+</div>
+
+</div>
+</body>
+</html>

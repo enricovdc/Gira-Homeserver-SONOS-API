@@ -1,104 +1,52 @@
-# Logic-module-only installation (no SSH, no separate server)
+# Gira HomeServer logic modules
 
-This directory contains everything needed to install the Sonos integration
-**entirely from inside the Gira HomeServer Experte**, with **no SSH access**
-to the HomeServer and **no Node.js bridge** running anywhere.
+The canonical deliverable for this project: **native HSL3 logic modules**
+that run inside the Gira HomeServer's own logic engine. No external
+service, no SSH, no companion machine. Import the `.hslz` archive in
+the HS Experte and you have working Sonos control.
 
-The integrator imports the contents of `experte-blocks/` and
-`visualisation/` in the HS Experte, sets a handful of data points, and
-downloads the project to the HomeServer. That's it.
-
-## How it works
-
-The HomeServer Experte already provides every building block we need:
-
-- **HTTP-Request senden** action — for outbound SOAP calls to the Sonos
-  player on port 1400 (play, pause, volume, radio start, …).
-- **Empfangs-URL** (inbound URL) — for receiving UPnP NOTIFY callbacks
-  from Sonos players when state changes. The HomeServer's own HTTP server
-  becomes the UPnP event sink.
-- **Empfangsfilter** (receive parser) — to extract values from SOAP
-  responses and from NOTIFY bodies using regex.
-- **Datenpunkte** (data points) — to store player IPs, station stream
-  URLs, current state, and subscription SIDs across reboots.
-- **Visualisierung** — to render a configuration page in the HomeServer's
-  own UI where the end user edits players and stations at runtime.
-- **Timer Logikbausteine** — to renew UPnP subscriptions before they
-  expire and to poll status for players that didn't acknowledge a
-  subscription.
-
-No external process. No port binding. No SSH.
-
-## Architecture
+## What's here
 
 ```
-┌────────────────────────────────────────────────────────┐
-│  Gira HomeServer                                        │
-│                                                         │
-│   KNX (in/out) ──┐                                      │
-│                  ▼                                      │
-│   Logic blocks   →  HTTP-Request senden  ──┐            │
-│                                            ▼            │
-│                                       Sonos Player      │
-│                                       :1400/MediaRen…   │
-│                                            │            │
-│                                            ▼            │
-│   Inbound URL  ←  UPnP NOTIFY  ←  Sonos Player          │
-│   (Empfangsfilter parses payload, writes data points)   │
-│                                                         │
-│   Visualisation  ↔  Data points (players, stations,     │
-│                       state, SIDs)                      │
-└────────────────────────────────────────────────────────┘
+homeserver/logic-module/
+├── hsl3/        Native HSL3 / Python 3.9 LogicModule sources.
+│                Two LBS modules: 22000 Sonos Player, 22001 Sonos Discover.
+│                Run `build/build_hslz.py` to package as .hslz for Experte import.
+│                See hsl3/README.md for details.
+│
+└── soap/        Raw SOAP envelope templates used inside the HSL3 Python.
+                 Kept here as a documentation cross-reference so the
+                 integrator can verify what wire-format the modules send.
+                 Not used directly in Experte — the .py file embeds them.
 ```
 
-## Trade-offs vs the bridge
+The `.hsl` files are the deliverable; the `.py` files in
+`hsl3/src_*` are the source that the Gira HSL3 generator compiles into
+those `.hsl` files. See `hsl3/README.md` for the build and import flow.
 
-| Feature | Logic-module-only | Bridge service |
-| --- | --- | --- |
-| Play / pause / next / prev / stop | ✓ | ✓ |
-| Volume / mute / mute-toggle | ✓ | ✓ |
-| Radio stations | ✓ | ✓ |
-| Status (poll) | ✓ | ✓ |
-| UPnP event push (no polling) | ✓ | ✓ |
-| SSDP auto-discovery | ✗ — enter IPs manually | ✓ |
-| Self-served web admin UI | Via HS visualisation page | Standalone admin page |
-| Installation effort | Import in Experte | One-time SSH + systemd |
-| Works on 2026 firmware | ✓ | ✓ |
+## Quick start
 
-The bridge gives you SSDP discovery and a single self-contained admin UI;
-this mode gives you a zero-SSH install at the cost of typing player IPs
-in by hand once. For a residential Gira install with 1–6 Sonos players,
-the trade-off is usually worth it.
+```sh
+# 1. Build the HSLZ archives
+python3 homeserver/logic-module/hsl3/build/build_hslz.py
 
-## Files
+# 2. In Experte: Logikbausteine → Importieren →
+#    select hsl3/build/dist/22000_sonos_player.hslz and 22001_sonos_discover.hslz
 
-```
-soap/
-  play.xml              SOAP envelope: AVTransport#Play
-  pause.xml             SOAP envelope: AVTransport#Pause
-  stop.xml
-  next.xml
-  previous.xml
-  set-volume.xml        AVTransport-style SetVolume on RenderingControl
-  set-mute.xml
-  get-transport.xml     AVTransport#GetTransportInfo (status poll)
-  get-volume.xml
-  set-av-transport-uri.xml   Radio station start (with metadata fallback)
-  subscribe.txt         Raw SUBSCRIBE request (curl-style headers)
-  notify-parsers.md     Regex patterns to extract values from NOTIFY
-experte-blocks/
-  data-points.md        List of data points to create, with names and types
-  http-actions.md       Each outbound HTTP-Request senden action defined
-  receive-urls.md       Each inbound Empfangs-URL (NOTIFY sink, webhook in)
-  logic-blocks.md       Wiring: which KNX GA triggers which HTTP action
-  timers.md             Subscription renewal + status poll
-visualisation/
-  config-page.html      Embeddable HTML for HS visualisation config page
-  README.md             How to host this page inside the HS visualisation
-INSTALL.md              Step-by-step Experte setup walkthrough
+# 3. Drag a Sonos Player block onto the logic canvas, set Host to the
+#    player's IP, wire inputs/outputs to KNX. Done.
 ```
 
-## Start here
+## What the HSL3 modules do
 
-Read [INSTALL.md](INSTALL.md). It takes ~30 minutes to wire up the first
-player and radio stations.
+- Control Sonos players (play/pause/stop/next/prev, volume, mute, mute toggle).
+- Eight configurable radio stations per player; firmware-2026-resilient
+  metadata-free direct-broadcast playback with automatic fallback.
+- Status outputs (Online, State, Volume, Mute, Title, Artist,
+  ActiveStation, LastError, Subscribed) updated in ~1 second via UPnP
+  event push (NOTIFY callback on TCP 8081 inside the HomeServer), with
+  status-poll fallback on a `Tick` timer for resilience.
+- Optional SSDP discovery to find players on the LAN at commissioning.
+
+See `hsl3/README.md` for the full input/output specification and
+KNX-mapping guidance.
