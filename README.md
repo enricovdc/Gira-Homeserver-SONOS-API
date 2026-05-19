@@ -61,7 +61,13 @@ firmware **4.13+** (HSL3 / Python 3.9 logic-module SDK).
   the dropdown, and that preset (triggerable via `StartRadio` /
   `StartRadioName` / `PresetNextPrev`) makes this player follow the
   master's playback.
-- **90 unit tests** with a stubbed `Hsl3Framework`, runnable in CI.
+- **Sounds library.** Upload notification clips (doorbell, alarm, TTS
+  recordings) via the Admin UI. The Player block's `PlaySound` input
+  snapshots whatever was playing (preset, queue position, volume,
+  mute), plays the clip via Sonos's native `SetAVTransportURI` +
+  `Play`, and restores the source when the clip finishes. The library
+  starts empty — drop in any MP3 / WAV / AAC / OGG / FLAC up to 2 MB.
+- **94 unit tests** with a stubbed `Hsl3Framework`, runnable in CI.
 
 ## Repository layout
 
@@ -130,7 +136,7 @@ on a machine that has the SDK.
 python3 tests/test_logic_modules.py
 ```
 
-90 tests covering: pure helpers (SOAP fault extraction, NOTIFY parsing,
+94 tests covering: pure helpers (SOAP fault extraction, NOTIFY parsing,
 URI normalisation, play-mode composition, transport-actions parsing,
 iso-8859-15 encoding), the
 `LogicModule` IO contract (string outputs are bytes, numeric outputs

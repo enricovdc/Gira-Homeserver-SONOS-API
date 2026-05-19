@@ -164,6 +164,7 @@ def make_player_inputs(host="10.0.0.1", **overrides):
         "PlayPause":    StubSlot(0),
         "NextPrev":     StubSlot(0),
         "PresetNextPrev": StubSlot(0),
+        "PlaySound":    StubSlot(0),
         "VolStep":      StubSlot(2),
         "PollInterval": StubSlot(60),
         "SubTimeout":   StubSlot(1800),
@@ -1383,6 +1384,177 @@ class TestPlayerStationFromAdmin(unittest.TestCase):
         # First "prev" from a never-started player → wraps to last preset.
         lm._active_station = 0
         lm._action_step_preset(-1); self.assertEqual(calls[-1], 3)
+
+    def test_action_play_sound_snapshots_and_restores(self):
+        """PlaySound dispatches SetAVTransportURI(sound_url) + Play,
+        polls for STOPPED, then puts the previous source back. Verifies
+        the SOAP sequence and that Volume / Mute / position / play
+        state are restored from the snapshot."""
+        # Seed an Admin sound in every loaded admin module so
+        # _admin_sound_url resolves.
+        upload_bytes = b"RIFF\x24\x00\x00\x00WAVEfmt fake-bytes"
+        for mod_name, mod in list(sys.modules.items()):
+            if mod is None:
+                continue
+            if "sonos_admin" in mod_name and hasattr(mod, "_sounds"):
+                with mod._registry_lock:
+                    mod._sounds.clear()
+                    mod._sounds["snd_1"] = {
+                        "id": "snd_1", "name": "Doorbell",
+                        "filename": "doorbell.wav",
+                        "mime": "audio/wav", "source": "uploaded",
+                        "size": len(upload_bytes),
+                        "_data": upload_bytes,
+                    }
+                ref = getattr(mod, "_admin_instance_ref", None)
+                if ref is not None:
+                    class _FakeAdmin:
+                        listener_port = 8080
+                    ref["instance"] = _FakeAdmin()
+
+        fw = StubFramework()
+        lm = self.player.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._host = "10.0.0.5"
+
+        # Build a SOAP stub that returns a believable snapshot then
+        # signals STOPPED on subsequent GetTransportInfo polls.
+        calls = []
+        poll_count = {"n": 0}
+        def fake_soap(service, action, envelope):
+            calls.append((service, action, envelope))
+            if action == "GetMediaInfo":
+                return (True,
+                        "<CurrentURI>x-sonosapi-stream:s24939</CurrentURI>"
+                        "<CurrentURIMetaData>&lt;DIDL/&gt;</CurrentURIMetaData>",
+                        "")
+            if action == "GetPositionInfo":
+                return (True,
+                        "<TrackURI>x-sonosapi-stream:s24939</TrackURI>"
+                        "<RelTime>0:00:00</RelTime>", "")
+            if action == "GetTransportInfo":
+                poll_count["n"] += 1
+                # First call (snapshot) returns PLAYING; subsequent
+                # polls (waiting for sound to end) return STOPPED.
+                state = "PLAYING" if poll_count["n"] == 1 else "STOPPED"
+                return (True,
+                        "<CurrentTransportState>{}</CurrentTransportState>".format(state),
+                        "")
+            if action == "GetVolume":
+                return (True, "<CurrentVolume>42</CurrentVolume>", "")
+            if action == "GetMute":
+                return (True, "<CurrentMute>0</CurrentMute>", "")
+            # Everything else (SetAVTransportURI / Play / Seek /
+            # SetVolume / SetMute) succeeds silently.
+            return (True, "", "")
+        lm._soap = fake_soap
+        # Don't actually sleep in the test poll loop.
+        original_sleep = self.player.time.sleep
+        self.player.time.sleep = lambda *_a, **_kw: None
+        try:
+            lm._action_play_sound(1)
+        finally:
+            self.player.time.sleep = original_sleep
+
+        actions = [a for (_s, a, _e) in calls]
+        # Snapshot collected the right metadata
+        for needed in ("GetMediaInfo", "GetPositionInfo", "GetTransportInfo",
+                       "GetVolume", "GetMute"):
+            self.assertIn(needed, actions, needed)
+        # The sound URL was dispatched and Play issued
+        seturi_envs = [e for (_s, a, e) in calls if a == "SetAVTransportURI"]
+        self.assertTrue(any("doorbell.wav" in e and ":8080/" in e
+                            for e in seturi_envs),
+                        "expected the sound URL (path /sounds/.../doorbell.wav on port 8080) in one of the SetAVTransportURI calls; got: {}".format(seturi_envs))
+        # After playback the original CurrentURI was restored AND Play
+        # was re-issued (snapshot state was PLAYING).
+        self.assertTrue(any("x-sonosapi-stream:s24939" in e
+                            for e in seturi_envs),
+                        "expected the snapshotted CurrentURI in a SetAVTransportURI restore call")
+        # Volume + Mute restored
+        self.assertTrue(any(a == "SetVolume" for (_s, a, _e) in calls))
+        self.assertTrue(any(a == "SetMute" for (_s, a, _e) in calls))
+        # And the last Play (after restore) is present
+        play_count = sum(1 for (_s, a, _e) in calls if a == "Play")
+        self.assertGreaterEqual(play_count, 2,
+                                "expected at least two Play actions: one for sound, one for restore")
+
+    def test_action_play_sound_unknown_writes_error(self):
+        """Unknown sound (empty library or out-of-range index) surfaces
+        SOUND_NOT_FOUND on LastError without dispatching any SOAP."""
+        for mod_name, mod in list(sys.modules.items()):
+            if mod is None:
+                continue
+            if "sonos_admin" in mod_name and hasattr(mod, "_sounds"):
+                with mod._registry_lock:
+                    mod._sounds.clear()
+        fw = StubFramework()
+        lm = self.player.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._host = "10.0.0.5"
+        calls = []
+        lm._soap = lambda *a, **kw: (calls.append(a) or (True, "", ""))
+        lm._action_play_sound(1)
+        self.assertEqual(calls, [])
+        self.assertIn(b"SOUND_NOT_FOUND", fw.outputs.get("LastError", b""))
+
+    def test_admin_api_add_sound_round_trip(self):
+        """Upload via api_add_sound, list, then remove. Audio bytes
+        survive a persist/load round-trip through the retentive store."""
+        import base64 as b64
+        fw = StubFramework()
+        lm = self.admin.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        for mod_name, mod in list(sys.modules.items()):
+            if mod is None:
+                continue
+            if "sonos_admin" in mod_name and hasattr(mod, "_sounds"):
+                with mod._registry_lock:
+                    mod._sounds.clear()
+        payload = b"\x52\x49\x46\x46\x10\x00\x00\x00WAVEfmt synthetic"
+        r = lm.api_add_sound({
+            "name": "Doorbell",
+            "filename": "doorbell.wav",
+            "mime": "audio/wav",
+            "data_b64": b64.b64encode(payload).decode("ascii"),
+        })
+        self.assertEqual(r["sound"]["name"], "Doorbell")
+        self.assertEqual(r["sound"]["size"], len(payload))
+        self.assertEqual(r["sound"]["source"], "uploaded")
+        # data_b64 must NOT round-trip through the public listing
+        listing = lm.api_list_sounds()
+        self.assertEqual(len(listing["sounds"]), 1)
+        self.assertNotIn("data_b64", listing["sounds"][0])
+        # Module-level get_sound_bytes returns the bytes
+        sid = r["sound"]["id"]
+        self.assertEqual(self.admin.get_sound_bytes(sid), payload)
+        # The publish/persist happened in node context
+        self.assertIn("PersistedSounds", fw.stores)
+        # Round-trip through the retentive store
+        with self.admin._registry_lock:
+            self.admin._sounds.clear()
+        class _Slot:
+            def __init__(self, v): self.value = v
+        class _Store(dict):
+            def __getitem__(self, k): return _Slot(fw.stores.get(k, b""))
+        lm._load_persisted(_Store())
+        self.assertEqual(self.admin.get_sound_bytes(sid), payload)
+        # Remove
+        lm.api_remove_sound(sid)
+        with self.admin._registry_lock:
+            self.assertEqual(len(self.admin._sounds), 0)
+
+    def test_admin_api_add_sound_rejects_oversized(self):
+        fw = StubFramework()
+        lm = self.admin.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        import base64 as b64
+        too_big = b"\x00" * (self.admin.MAX_SOUND_BYTES + 1)
+        with self.assertRaises(ValueError):
+            lm.api_add_sound({
+                "name": "Too big",
+                "data_b64": b64.b64encode(too_big).decode("ascii"),
+            })
 
     def test_action_step_preset_empty_library_writes_error(self):
         for mod_name, mod in list(sys.modules.items()):

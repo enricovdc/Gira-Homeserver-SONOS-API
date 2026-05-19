@@ -95,6 +95,24 @@ ENV_GET_POSITION = (
     '<s:Body><u:GetPositionInfo xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
     "<InstanceID>0</InstanceID></u:GetPositionInfo></s:Body></s:Envelope>"
 )
+# GetMediaInfo returns CurrentURI / CurrentURIMetaData — what was passed
+# to the last SetAVTransportURI call. Distinct from GetPositionInfo's
+# TrackURI: for queue playback CurrentURI is x-rincon-queue:..., TrackURI
+# is the current queue item. Restoring to the queue (CurrentURI) is what
+# resumes playback in the same source after a sound notification.
+ENV_GET_MEDIA = (
+    '<?xml version="1.0" encoding="utf-8"?>'
+    '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">'
+    '<s:Body><u:GetMediaInfo xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
+    "<InstanceID>0</InstanceID></u:GetMediaInfo></s:Body></s:Envelope>"
+)
+ENV_SEEK_REL_TIME = (
+    '<?xml version="1.0" encoding="utf-8"?>'
+    '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">'
+    '<s:Body><u:Seek xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
+    "<InstanceID>0</InstanceID><Unit>REL_TIME</Unit>"
+    "<Target>{pos}</Target></u:Seek></s:Body></s:Envelope>"
+)
 ENV_SET_URI = (
     '<?xml version="1.0" encoding="utf-8"?>'
     '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">'
@@ -417,6 +435,34 @@ def _lookup_station_via_admin(idx_or_name):
                 except Exception:
                     pass
     return None
+
+
+def _admin_sound_url(idx_or_name):
+    """Resolve a sound index/name into the Admin's HTTP serve URL.
+    Returns '' when Admin isn't loaded, the sound doesn't exist, or
+    the Admin HTTP server hasn't bound a port yet. The Player passes
+    this URL straight to ``SetAVTransportURI`` — Sonos fetches the
+    audio bytes from the Admin's HTTP listener."""
+    for mod_name, mod in list(sys.modules.items()):
+        if mod is None:
+            continue
+        if "sonos_admin" in mod_name or "hsl3_22001" in mod_name:
+            fn = getattr(mod, "get_sound_url", None)
+            ref = getattr(mod, "_admin_instance_ref", None)
+            if not (callable(fn) and ref):
+                continue
+            try:
+                inst = ref.get("instance")
+                if inst is None:
+                    continue
+                port = getattr(inst, "listener_port", 0) or 0
+                lan_ip = _get_local_lan_ip()
+                url = fn(idx_or_name, lan_ip, port)
+                if url:
+                    return url
+            except Exception:
+                pass
+    return ""
 
 
 def _admin_station_count():
@@ -895,6 +941,18 @@ class LogicModule:
                 lambda d=direction: self._action_step_preset(d)
             )
 
+        # PlaySound — write the alphabetical index of a sound in the
+        # Admin library. Sound playback snapshots the current state,
+        # plays the clip via Sonos's standard SetAVTransportURI + Play,
+        # then restores whatever was playing before (preset / queue /
+        # radio, position, volume, mute, transport state).
+        if inputs["PlaySound"].changed:
+            idx = int(inputs["PlaySound"].value or 0)
+            if idx > 0:
+                self._run_control_threaded(
+                    lambda i=idx: self._action_play_sound(i)
+                )
+
     def on_timer(self, timer):
         if timer["Tick"].changed:
             # Re-arm immediately so we never miss a tick.
@@ -1334,6 +1392,139 @@ class LogicModule:
         else:
             next_idx = count if current <= 1 else current - 1
         self._action_start_radio(next_idx)
+
+    # ----- Sound notifications ---------------------------------------------
+
+    def _action_play_sound(self, spec):
+        """Play a notification clip from the Admin sounds library and
+        restore whatever was playing afterwards.
+
+        The standard Sonos snapshot/restore pattern:
+
+          1. Snapshot CurrentURI + metadata (GetMediaInfo), position
+             (GetPositionInfo), state (GetTransportInfo), Volume, Mute.
+          2. SetAVTransportURI(sound_url) + Play.
+          3. Poll TransportState until STOPPED (or hit the cap).
+          4. SetAVTransportURI back to the snapshotted CurrentURI +
+             metadata. Seek to the saved REL_TIME for seekable sources
+             (queues / files); radio streams ignore Seek which is fine.
+             Restore Volume + Mute. Re-issue Play only if the snapshot
+             was PLAYING.
+
+        Runs in the worker thread spawned by `_run_control_threaded` so
+        the polling loop never blocks node context."""
+        url = _admin_sound_url(spec)
+        if not url:
+            self.fw.run_in_context(
+                self._write_error,
+                ("SOUND_NOT_FOUND: {}".format(spec),),
+            )
+            return
+
+        snapshot = self._snapshot_transport()
+
+        # Step 2: play the clip.
+        env = ENV_SET_URI.replace("{uri}", _xml_escape(url)).replace("{meta}", "")
+        ok, _b, err = self._soap("AVTransport", "SetAVTransportURI", env)
+        if not ok:
+            self.fw.run_in_context(self._write_error, (err or "SOUND_SETURI_FAILED",))
+            return
+        ok, _b, err = self._soap("AVTransport", "Play", ENV_PLAY)
+        if not ok:
+            self.fw.run_in_context(self._write_error, (err or "SOUND_PLAY_FAILED",))
+            # Best-effort restore even if Play failed.
+            self._restore_transport(snapshot)
+            return
+
+        # Step 3: wait for the clip to finish. Sonos transitions to
+        # STOPPED at end-of-file for SetAVTransportURI'd clips.
+        self._wait_until_stopped(timeout_s=120)
+
+        # Step 4: restore the previous source.
+        self._restore_transport(snapshot)
+
+    def _snapshot_transport(self):
+        """Capture everything `_restore_transport` needs to put the
+        player back into the source it was using. All fields default to
+        safe empty values so a player that's idle restores to idle."""
+        snap = {
+            "currentUri": "", "currentUriMeta": "",
+            "trackUri": "", "relTime": "0:00:00",
+            "state": "STOPPED", "volume": None, "mute": None,
+        }
+        ok, body, _err = self._soap("AVTransport", "GetMediaInfo", ENV_GET_MEDIA)
+        if ok:
+            snap["currentUri"]     = extract_response_field(body, "CurrentURI") or ""
+            snap["currentUriMeta"] = extract_response_field(body, "CurrentURIMetaData") or ""
+        ok, body, _err = self._soap("AVTransport", "GetPositionInfo", ENV_GET_POSITION)
+        if ok:
+            snap["trackUri"] = extract_response_field(body, "TrackURI") or ""
+            snap["relTime"]  = extract_response_field(body, "RelTime")  or "0:00:00"
+        ok, body, _err = self._soap("AVTransport", "GetTransportInfo", ENV_GET_TRANSPORT)
+        if ok:
+            snap["state"] = extract_response_field(body, "CurrentTransportState") or "STOPPED"
+        v = self._get_volume_blocking()
+        if v is not None:
+            snap["volume"] = v
+        ok, body, _err = self._soap("RenderingControl", "GetMute", ENV_GET_MUTE)
+        if ok:
+            snap["mute"] = (extract_response_field(body, "CurrentMute") == "1")
+        return snap
+
+    def _wait_until_stopped(self, timeout_s=120, poll_interval_s=1.0):
+        """Poll TransportState until the clip ends or the timeout
+        expires. The clip's actual length is unknown to us — Sonos
+        flips to STOPPED at EOF for direct SetAVTransportURI sources,
+        which is the unambiguous signal that playback finished."""
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            ok, body, _err = self._soap(
+                "AVTransport", "GetTransportInfo", ENV_GET_TRANSPORT
+            )
+            if not ok:
+                # Network blip — keep trying until the timeout.
+                time.sleep(poll_interval_s)
+                continue
+            state = extract_response_field(body, "CurrentTransportState") or ""
+            if state == "STOPPED":
+                return
+            time.sleep(poll_interval_s)
+
+    def _restore_transport(self, snap):
+        """Re-establish the player's pre-sound state. Best-effort: each
+        step is independent and a failure doesn't abort the others.
+        Volume / Mute are restored even when there was nothing playing
+        so the next manual playback inherits the user's level."""
+        # Restore CurrentURI (queue, radio, file, or whatever it was).
+        if snap.get("currentUri"):
+            env = ENV_SET_URI \
+                .replace("{uri}",  _xml_escape(snap["currentUri"])) \
+                .replace("{meta}", _xml_escape(snap.get("currentUriMeta") or ""))
+            self._soap("AVTransport", "SetAVTransportURI", env)
+
+        # Seek back to where playback was. Radio streams reject Seek
+        # with UPnP error 711 ("transport is not seekable") — that's
+        # expected and harmless; we ignore the return code.
+        rel = snap.get("relTime") or "0:00:00"
+        if rel and rel != "0:00:00" and rel != "NOT_IMPLEMENTED":
+            self._soap("AVTransport", "Seek", ENV_SEEK_REL_TIME.format(pos=rel))
+
+        # Restore Volume + Mute.
+        if snap.get("volume") is not None:
+            self._soap(
+                "RenderingControl", "SetVolume",
+                ENV_SET_VOLUME.format(level=int(snap["volume"])),
+            )
+        if snap.get("mute") is not None:
+            self._soap(
+                "RenderingControl", "SetMute",
+                ENV_SET_MUTE.format(mute="1" if snap["mute"] else "0"),
+            )
+
+        # Resume playback only if the snapshot was actively playing.
+        # Paused / Stopped snapshots stay in their original state.
+        if snap.get("state") == "PLAYING":
+            self._soap("AVTransport", "Play", ENV_PLAY)
 
     # ----- Periodic tick ----------------------------------------------------
 

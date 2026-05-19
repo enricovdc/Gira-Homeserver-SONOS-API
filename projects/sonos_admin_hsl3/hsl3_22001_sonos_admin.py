@@ -72,6 +72,8 @@ _registry_lock = threading.RLock()
 _players = {}     # id(str) -> {"id","name","ip","mac","uuid","model","source"}
 _stations = {}    # id(str) -> {"id","name","uri","metadata"}
 _groups = {}      # id(str) -> {"id","name","master","members"} (master/members are player ids)
+_sounds = {}      # id(str) -> {"id","name","filename","source","size",
+                  #              "_data" (raw bytes, excluded from JSON)}
 _cloud = {
     "clientId": "",
     "clientSecret": "",
@@ -326,6 +328,111 @@ def get_station_count():
     PresetNextPrev input uses this to wrap around at the boundaries."""
     with _registry_lock:
         return len(_stations)
+
+
+# ---------------------------------------------------------------------------
+# Sounds library — short notification audio clips (doorbell, alarm, …)
+# uploaded by the integrator via the web UI and triggered by the LBS
+# 22000 Player block's PlaySound input. The library starts empty;
+# upload any MP3/WAV via the Sounds section in the Admin UI. Audio
+# bytes persist across HomeServer restarts as base64 in a retentive
+# store. The LBS 22000 plays the clip and automatically restores
+# whatever was playing before (preset, queue position, volume, mute).
+# ---------------------------------------------------------------------------
+
+# Hard cap on uploaded sound size. Retentive stores have a finite
+# budget; 2 MB is plenty for a 10-second clip at decent quality. The
+# upload form in the web UI shows the limit.
+MAX_SOUND_BYTES = 2 * 1024 * 1024
+
+
+def get_sound(index_or_name):
+    """Return a sound record (incl. 1-based alphabetical ``index``) by
+    numeric index or by case-insensitive name. None when not found."""
+    if index_or_name is None:
+        return None
+    key = str(index_or_name).strip()
+    if not key:
+        return None
+    with _registry_lock:
+        sorted_sounds = sorted(_sounds.values(), key=lambda s: s["name"].lower())
+        if key.isdigit():
+            idx = int(key)
+            if 1 <= idx <= len(sorted_sounds):
+                rec = _public_sound(sorted_sounds[idx - 1])
+                rec["index"] = idx
+                return rec
+            return None
+        for i, rec in enumerate(sorted_sounds, start=1):
+            if rec["name"].lower() == key.lower():
+                r = _public_sound(rec)
+                r["index"] = i
+                return r
+    return None
+
+
+def get_sound_count():
+    with _registry_lock:
+        return len(_sounds)
+
+
+def _public_sound(rec):
+    """Strip server-internal fields (``_generator``, ``_data``) before
+    returning a sound record to a caller. Keeps the JSON small and the
+    base64 payload off the wire when listing."""
+    out = {}
+    for k in ("id", "name", "filename", "source", "size", "mime"):
+        if k in rec:
+            out[k] = rec[k]
+    return out
+
+
+def get_sound_bytes(sound_id):
+    """Return the raw audio bytes for a sound id. Built-in sounds are
+    generated lazily and cached. User uploads return the decoded
+    payload. None when the sound id is unknown."""
+    with _registry_lock:
+        rec = _sounds.get(sound_id)
+    if rec is None:
+        return None
+    return rec.get("_data")
+
+
+_AUDIO_MIME_BY_EXT = {
+    ".wav":  "audio/wav",
+    ".mp3":  "audio/mpeg",
+    ".m4a":  "audio/mp4",
+    ".aac":  "audio/aac",
+    ".ogg":  "audio/ogg",
+    ".flac": "audio/flac",
+}
+
+
+def _guess_audio_mime(filename):
+    if not filename:
+        return "application/octet-stream"
+    lower = filename.lower()
+    for ext, mime in _AUDIO_MIME_BY_EXT.items():
+        if lower.endswith(ext):
+            return mime
+    return "application/octet-stream"
+
+
+def get_sound_url(index_or_name, lan_ip, port):
+    """Build the http://<hs-ip>:<admin-port>/sounds/<id>/<filename> URL
+    that Sonos fetches when LBS 22000 plays a sound. The id in the
+    path guarantees uniqueness (two uploads with the same filename
+    don't collide); the filename suffix gives Sonos the format hint it
+    uses to pick a decoder. Returns '' when the sound is unknown or
+    the Admin hasn't bound a port yet."""
+    if not lan_ip or not port:
+        return ""
+    rec = get_sound(index_or_name)
+    if not rec:
+        return ""
+    return "http://{}:{}/sounds/{}/{}".format(
+        lan_ip, port, rec["id"], rec["filename"]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -915,6 +1022,26 @@ details.group-add .row { margin-top: 6px; }
   </section>
 
   <section>
+    <h2>Sounds</h2>
+    <p class="muted">Notification clips (doorbell, alarm, …) the Sonos Player block can play via the <code>PlaySound</code> input. Upload an MP3/WAV/AAC/OGG/FLAC, write the row&apos;s <strong>#</strong> into <code>PlaySound</code> on a Player block — the player snapshots its current state, plays the clip, then restores what was playing (preset, queue position, volume, mute). Library starts empty; the file lives in HomeServer retentive storage.</p>
+    <table id="sounds">
+      <thead><tr>
+        <th style="width:5%">#</th>
+        <th style="width:32%">Name</th>
+        <th>Filename</th>
+        <th style="width:10%">Size</th>
+        <th style="width:8%">Actions</th>
+      </tr></thead><tbody></tbody>
+    </table>
+    <div class="row">
+      <input id="snd-name" placeholder="name (e.g. Doorbell)" style="max-width: 220px">
+      <input id="snd-file" type="file" accept="audio/*" style="max-width: 280px">
+      <button id="snd-upload">Upload sound</button>
+      <span id="snd-state" class="muted"></span>
+    </div>
+  </section>
+
+  <section>
     <h2>Player Defaults</h2>
     <p class="muted">Defaults the Sonos Player block falls back to when its own tunable inputs (PollInterval, SubTimeout, HttpTimeout, CallbackBase) are left at their init value. Setting them here once means you don't have to wire those inputs on every Player block.</p>
     <div class="grid">
@@ -958,6 +1085,7 @@ details.group-add .row { margin-top: 6px; }
   <a href="/api/stations">/api/stations</a>
   <a href="/api/cloud">/api/cloud</a>
   <a href="/api/player-defaults">/api/player-defaults</a>
+  <a href="/api/sounds">/api/sounds</a>
   <a href="/tile.html">/tile.html</a>
 </div>
 </div>
@@ -1110,6 +1238,32 @@ async function refreshPlayerDefaults() {
   document.getElementById('pd-sub').value = r.defaults.subTimeout;
   document.getElementById('pd-http').value = r.defaults.httpTimeout;
   document.getElementById('pd-cb').value = r.defaults.callbackBase || '';
+}
+function fmtSize(n) {
+  if (!n) return '—';
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1024 / 1024).toFixed(2) + ' MB';
+}
+async function refreshSounds() {
+  const r = await api('GET', '/api/sounds');
+  const tbody = document.querySelector('#sounds tbody');
+  tbody.innerHTML = '';
+  for (const s of (r.sounds || [])) {
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td><strong>' + s.index + '</strong></td>' +
+      '<td><input data-snd-edit="' + esc(s.id) + '" data-field="name" value="' + esc(s.name) + '"></td>' +
+      '<td><code>' + esc(s.filename) + '</code></td>' +
+      '<td>' + fmtSize(s.size) + '</td>' +
+      '<td><button class="danger small" data-del-sound="' + esc(s.id) + '">x</button></td>';
+    tbody.appendChild(tr);
+  }
+  if (!(r.sounds || []).length) {
+    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#808080;padding:12px">' +
+      'No sounds yet. Upload an MP3 or WAV below.' +
+      '</td></tr>';
+  }
 }
 async function refreshDiag() {
   const r = await api('GET', '/api/info');
@@ -1343,7 +1497,8 @@ document.addEventListener('change', async (ev) => {
 
 async function refreshAll() {
   try { await refreshPlayers(); await refreshStations(); await refreshGroups();
-        await refreshPlayerDefaults(); await refreshCloud(); await refreshDiag(); }
+        await refreshSounds(); await refreshPlayerDefaults();
+        await refreshCloud(); await refreshDiag(); }
   catch (e) { toast(e.message, true); }
 }
 document.addEventListener('change', async (ev) => {
@@ -1358,6 +1513,11 @@ document.addEventListener('change', async (ev) => {
                     { [t.dataset.field]: t.value }); toast('Saved'); }
     catch (e) { toast(e.message, true); }
   }
+  if (t.dataset.sndEdit) {
+    try { await api('PATCH', '/api/sounds/' + encodeURIComponent(t.dataset.sndEdit),
+                    { [t.dataset.field]: t.value }); toast('Saved'); }
+    catch (e) { toast(e.message, true); }
+  }
 });
 document.addEventListener('click', async (ev) => {
   const t = ev.target;
@@ -1369,6 +1529,11 @@ document.addEventListener('click', async (ev) => {
     }
     if (t.dataset.delStation) {
       await api('DELETE', '/api/stations/' + encodeURIComponent(t.dataset.delStation));
+      refreshAll();
+    }
+    if (t.dataset.delSound) {
+      if (!confirm('Remove sound?')) return;
+      await api('DELETE', '/api/sounds/' + encodeURIComponent(t.dataset.delSound));
       refreshAll();
     }
     if (t.dataset.host !== undefined) {
@@ -1518,6 +1683,41 @@ document.getElementById('nj-add').addEventListener('click', async () => {
     refreshAll();
   } catch (e) { toast(e.message, true); }
 });
+// Read a File as base64 in a single non-blocking step. FileReader is
+// the only cross-browser way to get bytes out of a <input type="file">.
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onerror = () => reject(new Error('file read failed'));
+    r.onload = () => {
+      const s = r.result || '';
+      // FileReader.readAsDataURL gives us "data:audio/wav;base64,XYZ"
+      const i = s.indexOf(',');
+      resolve(i >= 0 ? s.slice(i + 1) : s);
+    };
+    r.readAsDataURL(file);
+  });
+}
+document.getElementById('snd-upload').addEventListener('click', async () => {
+  const name = document.getElementById('snd-name').value.trim();
+  const fileInput = document.getElementById('snd-file');
+  const file = fileInput.files && fileInput.files[0];
+  if (!name) return toast('name required', true);
+  if (!file)  return toast('pick a file', true);
+  const stateEl = document.getElementById('snd-state');
+  stateEl.textContent = 'Uploading ' + fmtSize(file.size) + '...';
+  try {
+    const data_b64 = await fileToBase64(file);
+    await api('POST', '/api/sounds', {
+      name, filename: file.name, mime: file.type || '', data_b64,
+    });
+    document.getElementById('snd-name').value = '';
+    fileInput.value = '';
+    stateEl.textContent = 'Uploaded';
+    setTimeout(() => { stateEl.textContent = ''; }, 2000);
+    refreshSounds();
+  } catch (e) { stateEl.textContent = ''; toast(e.message, true); }
+});
 document.getElementById('pd-save').addEventListener('click', async () => {
   const body = {
     pollInterval: parseInt(document.getElementById('pd-poll').value, 10) || 0,
@@ -1647,6 +1847,11 @@ class _AdminHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0") or "0")
         if not length:
             return {}
+        # Cap a hair above MAX_SOUND_BYTES so a max-size upload still
+        # fits the base64-inflated JSON body. Anything bigger is almost
+        # certainly an accidental or malicious payload.
+        if length > MAX_SOUND_BYTES * 2:
+            return None
         try:
             return json.loads(self.rfile.read(length).decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
@@ -1676,6 +1881,15 @@ class _AdminHandler(BaseHTTPRequestHandler):
                 return self._send(200, self.server.admin.api_get_cloud())
             if path == "/api/player-defaults":
                 return self._send(200, self.server.admin.api_get_player_defaults())
+            if path == "/api/sounds":
+                return self._send(200, self.server.admin.api_list_sounds())
+            # Public sound delivery — Sonos players fetch the audio from
+            # this route via the URL get_sound_url() built. Decoupled
+            # from /api/ so it has no Cache-Control: no-store header and
+            # no JSON wrapper.
+            m = re.match(r"^/sounds/([^/]+)/.+$", path)
+            if m:
+                return self._serve_sound_bytes(urllib.parse.unquote(m.group(1)))
             if path == "/oauth/start":
                 return self._oauth_start()
             if path == "/oauth/callback":
@@ -1731,6 +1945,8 @@ class _AdminHandler(BaseHTTPRequestHandler):
                 return self._send(200, self.server.admin.api_add_station(body))
             if path == "/api/groups":
                 return self._send(200, self.server.admin.api_add_group(body))
+            if path == "/api/sounds":
+                return self._send(200, self.server.admin.api_add_sound(body))
             self._err(404, "NOT_FOUND", "no such route")
         except ValueError as exc:
             self._err(400, "INVALID_ARG", str(exc))
@@ -1766,6 +1982,9 @@ class _AdminHandler(BaseHTTPRequestHandler):
             m = re.match(r"^/api/groups/(.+)$", path)
             if m:
                 return self._send(200, self.server.admin.api_update_group(urllib.parse.unquote(m.group(1)), body))
+            m = re.match(r"^/api/sounds/(.+)$", path)
+            if m:
+                return self._send(200, self.server.admin.api_update_sound(urllib.parse.unquote(m.group(1)), body))
             self._err(404, "NOT_FOUND", "no such route")
         except ValueError as exc:
             self._err(400, "INVALID_ARG", str(exc))
@@ -1784,11 +2003,31 @@ class _AdminHandler(BaseHTTPRequestHandler):
             m = re.match(r"^/api/groups/(.+)$", path)
             if m:
                 return self._send(200, self.server.admin.api_remove_group(urllib.parse.unquote(m.group(1))))
+            m = re.match(r"^/api/sounds/(.+)$", path)
+            if m:
+                return self._send(200, self.server.admin.api_remove_sound(urllib.parse.unquote(m.group(1))))
             self._err(404, "NOT_FOUND", "no such route")
         except ValueError as exc:
             self._err(400, "INVALID_ARG", str(exc))
         except Exception as exc:  # noqa: BLE001
             self._err(500, "INTERNAL", str(exc))
+
+    def _serve_sound_bytes(self, sound_id):
+        """Stream the audio bytes Sonos requested. Uses the MIME the
+        upload provided so MP3/AAC/OGG decoders pick the right codec."""
+        data = get_sound_bytes(sound_id)
+        if data is None:
+            return self._err(404, "NOT_FOUND", "no such sound")
+        with _registry_lock:
+            rec = _sounds.get(sound_id)
+        mime = (rec or {}).get("mime", "audio/wav")
+        self.send_response(200)
+        self.send_header("Content-Type", mime)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Cache-Control", "max-age=3600")
+        self.end_headers()
+        self.wfile.write(data)
 
     # --- OAuth helpers -----------------------------------------------------
     def _oauth_start(self):
@@ -2041,6 +2280,27 @@ class LogicModule:
                 cb = defaults.get("callbackBase")
                 if isinstance(cb, str):
                     _player_defaults["callbackBase"] = cb
+            # Uploaded sounds — the audio bytes ride along as base64 in
+            # the same JSON blob so a HomeServer restart inherits both
+            # the metadata AND the playable data. Built-in sounds are
+            # NOT persisted; they're re-seeded from _BUILTIN_SOUNDS on
+            # every on_init.
+            import base64 as _b64
+            for rec in _safe_json(_read_str("PersistedSounds"), []):
+                if not isinstance(rec, dict) or not rec.get("id"):
+                    continue
+                if rec.get("source") == "builtin":
+                    continue  # defensive — never restore over a builtin
+                b64 = rec.pop("data_b64", "") or ""
+                if not b64:
+                    continue
+                try:
+                    data = _b64.b64decode(b64)
+                except Exception:
+                    continue
+                rec["_data"] = data
+                rec["size"] = len(data)
+                _sounds[rec["id"]] = rec
 
     def _persist(self):
         """Serialize the four registries to retentive stores. Must run in
@@ -2048,12 +2308,31 @@ class LogicModule:
         encoded as compact JSON then iso-8859-15 bytes per the HSL3 SDK
         string-output contract."""
         with _registry_lock:
+            # Build the uploaded-sounds payload: skip built-ins (they
+            # re-seed on each boot) and re-encode the audio bytes as
+            # base64 so the value is JSON-safe.
+            import base64 as _b64
+            sound_payload = []
+            for rec in _sounds.values():
+                if rec.get("source") == "builtin":
+                    continue
+                data = rec.get("_data") or b""
+                sound_payload.append({
+                    "id":       rec["id"],
+                    "name":     rec["name"],
+                    "filename": rec.get("filename", ""),
+                    "source":   rec.get("source", "uploaded"),
+                    "size":     len(data),
+                    "mime":     rec.get("mime", "audio/wav"),
+                    "data_b64": _b64.b64encode(data).decode("ascii"),
+                })
             try:
                 p = json.dumps(list(_players.values()), separators=(",", ":"))
                 s = json.dumps(list(_stations.values()), separators=(",", ":"))
                 g = json.dumps(list(_groups.values()), separators=(",", ":"))
                 c = json.dumps(_cloud, separators=(",", ":"))
                 d = json.dumps(_player_defaults, separators=(",", ":"))
+                sounds_json = json.dumps(sound_payload, separators=(",", ":"))
             except (TypeError, ValueError) as exc:
                 # Should never happen — every record is plain str/int/bool/
                 # list/dict — but never let a JSON encode failure break the
@@ -2069,6 +2348,7 @@ class LogicModule:
             self.fw.set_store("PersistedGroups",         g.encode("iso-8859-15", "replace"))
             self.fw.set_store("PersistedCloud",          c.encode("iso-8859-15", "replace"))
             self.fw.set_store("PersistedPlayerDefaults", d.encode("iso-8859-15", "replace"))
+            self.fw.set_store("PersistedSounds",         sounds_json.encode("iso-8859-15", "replace"))
         except Exception as exc:  # noqa: BLE001
             try:
                 self.logger.warning("Persist set_store failed: %s", exc)
@@ -2430,6 +2710,81 @@ class LogicModule:
                 _player_defaults["callbackBase"] = (body["callbackBase"] or "").strip().rstrip("/")
         self._sync_async()
         return {"ok": True, "defaults": dict(_player_defaults)}
+
+    # ----- Sounds library --------------------------------------------------
+
+    def api_list_sounds(self):
+        with _registry_lock:
+            sorted_sounds = sorted(_sounds.values(), key=lambda s: s["name"].lower())
+        out = []
+        for i, rec in enumerate(sorted_sounds, start=1):
+            pub = _public_sound(rec)
+            pub["index"] = i
+            out.append(pub)
+        return {"ok": True, "sounds": out, "maxBytes": MAX_SOUND_BYTES}
+
+    def api_add_sound(self, body):
+        """Upload a sound. ``body`` is JSON with:
+            - name      (string, required)
+            - filename  (string, optional — used in the public URL)
+            - mime      (string, optional — defaults to audio/wav)
+            - data_b64  (string, required — base64-encoded audio bytes)
+        Rejects payloads bigger than MAX_SOUND_BYTES so a runaway upload
+        can't blow the retentive-store budget."""
+        import base64 as _b64
+        name = (body.get("name") or "").strip()
+        if not name:
+            raise ValueError("name required")
+        b64 = body.get("data_b64") or ""
+        if not b64:
+            raise ValueError("data_b64 required")
+        try:
+            data = _b64.b64decode(b64, validate=False)
+        except Exception:
+            raise ValueError("data_b64 is not valid base64")
+        if not data:
+            raise ValueError("data_b64 decoded to zero bytes")
+        if len(data) > MAX_SOUND_BYTES:
+            raise ValueError(
+                "audio exceeds {} bytes".format(MAX_SOUND_BYTES)
+            )
+        filename = (body.get("filename") or "").strip() or (name + ".bin")
+        mime = (body.get("mime") or "").strip() or _guess_audio_mime(filename)
+        sid = "snd_" + str(int(time.time() * 1000))
+        rec = {
+            "id":       sid,
+            "name":     name,
+            "filename": filename,
+            "mime":     mime,
+            "source":   "uploaded",
+            "size":     len(data),
+            "_data":    data,
+        }
+        with _registry_lock:
+            _sounds[sid] = rec
+        self._sync_async()
+        return {"ok": True, "sound": _public_sound(rec)}
+
+    def api_update_sound(self, sid, body):
+        with _registry_lock:
+            rec = _sounds.get(sid)
+            if rec is None:
+                raise ValueError("unknown sound id")
+            if "name" in body:
+                v = (body["name"] or "").strip()
+                if not v:
+                    raise ValueError("name cannot be empty")
+                rec["name"] = v
+        self._sync_async()
+        return {"ok": True, "sound": _public_sound(rec)}
+
+    def api_remove_sound(self, sid):
+        with _registry_lock:
+            removed = _sounds.pop(sid, None)
+        if removed is None:
+            raise ValueError("unknown sound id")
+        self._sync_async()
+        return {"ok": True}
 
     def api_set_cloud(self, body):
         with _registry_lock:

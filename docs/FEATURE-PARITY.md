@@ -2,7 +2,7 @@
 
 Every user-facing function the integration exposes, and where it lives
 in the HSL3 modules. Refreshed against the v1.0.0 module shipped in
-this repo: **LBS 22000 Sonos Player** with 27 inputs / 28 outputs and
+this repo: **LBS 22000 Sonos Player** with 28 inputs / 28 outputs and
 **LBS 22001 Sonos Admin** with 7 inputs / 8 outputs + 5 retentive
 stores.
 
@@ -31,6 +31,7 @@ stores.
 | Play / Pause toggle (single 1-bit GA) | `PlayPause` (E20) | Value-driven. Writing 1 plays, writing 0 pauses. Pairs with one KNX toggle GA. |
 | Next / Previous track toggle | `NextPrev` (E21) | Value-driven. Writing 1 = next, writing 0 = previous. |
 | Next / Previous preset toggle | `PresetNextPrev` (E22) | Steps through the Admin preset library alphabetically. Wraps at both ends. NO_PRESETS on LastError if the library is empty. |
+| Play notification sound | `PlaySound` (E23) | Plays a clip from the Admin Sounds library (alphabetical index 1..N) using Sonos's native SetAVTransportURI + Play. Snapshots state first, polls for STOPPED, then restores the previous source / position / volume / mute / transport state. |
 
 ## Status / observability (LBS 22000 outputs)
 
@@ -70,11 +71,11 @@ stores.
 | Function | Input | Default | Notes |
 | --- | --- | --- | --- |
 | Player host | `Host` (E1) | "" (required) | UUID (preferred) / MAC / name / IPv4. Admin resolves the first three to a current IP. |
-| Volume step | `VolStep` (E23) | 2 | Applied by `VolUp` / `VolDown` |
-| Status poll interval | `PollInterval` (E24) | 60 s | Leave at 0 to use the Admin's Player Defaults value |
-| UPnP subscription timeout | `SubTimeout` (E25) | 1800 s | Leave at 0 to use the Admin's Player Defaults value |
-| HTTP request timeout | `HttpTimeout` (E26) | 5 s | Leave at 0 to use the Admin's Player Defaults value |
-| Callback base URL | `CallbackBase` (E27) | "" | Empty → Admin default → auto-detected `http://<lan-ip>:<listener-port>` |
+| Volume step | `VolStep` (E24) | 2 | Applied by `VolUp` / `VolDown` |
+| Status poll interval | `PollInterval` (E25) | 60 s | Leave at 0 to use the Admin's Player Defaults value |
+| UPnP subscription timeout | `SubTimeout` (E26) | 1800 s | Leave at 0 to use the Admin's Player Defaults value |
+| HTTP request timeout | `HttpTimeout` (E27) | 5 s | Leave at 0 to use the Admin's Player Defaults value |
+| Callback base URL | `CallbackBase` (E28) | "" | Empty → Admin default → auto-detected `http://<lan-ip>:<listener-port>` |
 
 ## Presets (Admin library, no per-player slots)
 
@@ -89,6 +90,18 @@ stores.
 | Container playback (playlists, saved queues, albums) | `_play_via_queue` | `RemoveAllTracksFromQueue` → `AddURIToQueue` → `SetAVTransportURI(x-rincon-queue:<uuid>#0)` → `Play`. Routed by `_is_container_uri` |
 | Cross-LBS station lookup | `get_station` / `get_station_uri` module-level helpers in the Admin | LBS 22000 calls via `sys.modules` lookup; returns the full record including metadata |
 | Group-join preset | Preset record with `uri="x-rincon:RINCON_<master>"` and `type="join"` | Admin UI offers a dedicated "Add join preset" form with a master dropdown so the integrator never types the URI by hand. The Player's `_is_group_join_uri` detects the bare `x-rincon:` scheme and dispatches `SetAVTransportURI` without a subsequent `Play` — slaves auto-inherit the master's transport state. Triggered like any other preset via `StartRadio` / `StartRadioName` / `PresetNextPrev`. |
+
+## Sounds (notification clips)
+
+| Function | Location | Notes |
+| --- | --- | --- |
+| Upload an audio file | Admin web UI "Sounds" section, `POST /api/sounds` | Accepts MP3 / WAV / AAC / OGG / FLAC up to `MAX_SOUND_BYTES` (2 MB). Body is base64-encoded so the upload survives the existing JSON HTTP API. |
+| List sounds | `GET /api/sounds` | Returns `[{id, name, filename, size, mime, index}]` — `data_b64` is never echoed back to keep listing payloads small. |
+| Rename / delete | `PATCH` / `DELETE /api/sounds/{id}` | Standard CRUD. |
+| Serve audio to Sonos | `GET /sounds/{id}/{filename}` | Public route the Sonos player fetches when LBS 22000 plays the clip. Sets the right `Content-Type` from the upload's MIME so decoders pick the right codec. |
+| Trigger from KNX / Player block | LBS 22000 input `PlaySound` (E23) | Writes alphabetical index → `_action_play_sound` → snapshot → SetAVTransportURI(sound_url) + Play → poll for STOPPED → restore. |
+| Cross-LBS URL resolution | `get_sound_url` module-level helper | Returns `http://<hs-ip>:<admin-port>/sounds/<id>/<filename>` using the Admin's bound port. |
+| Snapshot / restore | `_snapshot_transport` + `_restore_transport` | Captures CurrentURI + metadata, RelTime, TransportState, Volume, Mute. After the clip ends restores via SetAVTransportURI → Seek(REL_TIME) → SetVolume → SetMute → Play (only if the snapshot was PLAYING). Radio-stream Seek rejection (UPnP 711) is ignored — radio resumes "from now" rather than the original timestamp. |
 
 ## Group presets
 
@@ -135,6 +148,7 @@ stores.
 | `PersistedGroups` | Group presets (master + members) | yes |
 | `PersistedCloud` | Sonos Cloud OAuth credentials + tokens | yes |
 | `PersistedPlayerDefaults` | Project-wide Player tunable defaults | yes |
+| `PersistedSounds` | Uploaded notification clips (incl. base64-encoded audio bytes) | yes |
 
 Writes go through `_persist()` after every mutation, marshalled into
 node context via `run_in_context` so the HTTP-handler thread doesn't
@@ -177,6 +191,9 @@ primitives.
 | Add / edit / remove a group preset | `POST` / `PATCH` / `DELETE /api/groups[/{id}]` | `api_add_group` / `api_update_group` / `api_remove_group` |
 | Get player defaults | `GET /api/player-defaults` | `api_get_player_defaults` |
 | Set player defaults | `PUT /api/player-defaults` | `api_set_player_defaults`. Lower-bound clamping mirrors the Player module's. |
+| List notification sounds | `GET /api/sounds` | `api_list_sounds` |
+| Upload / rename / delete a sound | `POST` / `PATCH` / `DELETE /api/sounds[/{id}]` | `api_add_sound` / `api_update_sound` / `api_remove_sound`. Audio payload as base64 in the request body. |
+| Public sound delivery | `GET /sounds/{id}/{filename}` | Streams the raw bytes with the upload's MIME type so Sonos picks the right decoder. |
 | Sonos Cloud credentials | `GET` / `PUT /api/cloud` | `api_get_cloud` / `api_set_cloud`. `clientSecret` never echoed back to UI. |
 | OAuth authorize flow | `GET /oauth/start` | 302 to Sonos with the configured `client_id` + redirect URI |
 | OAuth callback + token exchange | `GET /oauth/callback` | POSTs to the Sonos token endpoint, stores access + refresh tokens |
