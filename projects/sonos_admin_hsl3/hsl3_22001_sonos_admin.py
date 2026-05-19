@@ -861,6 +861,17 @@ details.group-add .row { margin-top: 6px; }
       <input id="ns-uri"  placeholder="stream URL: http://... or x-rincon-mp3radio://...">
       <button id="ns-add">Add preset</button>
     </div>
+    <p class="muted" style="margin-top:14px">
+      Or create a <strong>join preset</strong>: triggering this preset
+      makes the Sonos Player join an existing master speaker (it stops
+      its own playback and inherits the master&apos;s). Use it to wire
+      a single KNX address to "follow the kitchen" or similar.
+    </p>
+    <div class="row">
+      <input id="nj-name" placeholder="preset name (e.g. Join Kitchen)" style="max-width: 240px">
+      <select id="nj-master" style="max-width: 220px"></select>
+      <button id="nj-add">Add join preset</button>
+    </div>
   </section>
 
   <section>
@@ -1161,6 +1172,18 @@ async function refreshGroups() {
   const masterSel = document.getElementById('ng-master');
   masterSel.innerHTML = '<option value="">(pick a master)</option>' +
     players.map(p => '<option value="' + esc(p.id) + '">' + esc(_playerIndex[p.id]) + '</option>').join('');
+  // The "Add join preset" dropdown keys off the player's UUID rather
+  // than its id — the URI we build (x-rincon:RINCON_...) is the UUID
+  // verbatim, and only players with a known UUID can act as a master.
+  const njSel = document.getElementById('nj-master');
+  if (njSel) {
+    const haveUuid = players.filter(p => p.uuid);
+    njSel.innerHTML = '<option value="">(pick a master speaker)</option>' +
+      haveUuid.map(p =>
+        '<option value="' + esc(p.uuid) + '">' +
+        esc(p.zoneName || p.name || p.ip || p.uuid) + '</option>'
+      ).join('');
+  }
   // Render the "Add" form's member chips with no master selected yet;
   // the change-handler on #ng-master will re-render with the master
   // chip locked + tagged whenever the user picks one.
@@ -1472,6 +1495,26 @@ document.getElementById('ns-add').addEventListener('click', async () => {
     await api('POST', '/api/stations', { name, uri });
     document.getElementById('ns-name').value = '';
     document.getElementById('ns-uri').value = '';
+    refreshAll();
+  } catch (e) { toast(e.message, true); }
+});
+document.getElementById('nj-add').addEventListener('click', async () => {
+  const name = document.getElementById('nj-name').value.trim();
+  const sel = document.getElementById('nj-master');
+  const masterUuid = sel.value;
+  if (!name) return toast('preset name required', true);
+  if (!masterUuid) return toast('pick a master speaker', true);
+  // The URI scheme that joins a master is bare x-rincon: (colon), not
+  // x-rincon-stream / x-rincon-cpcontainer / etc. The Player module
+  // detects this scheme and skips the Play step — slaves auto-inherit
+  // the master's transport state.
+  try {
+    await api('POST', '/api/stations', {
+      name,
+      uri: 'x-rincon:' + masterUuid,
+      type: 'join',
+    });
+    document.getElementById('nj-name').value = '';
     refreshAll();
   } catch (e) { toast(e.message, true); }
 });

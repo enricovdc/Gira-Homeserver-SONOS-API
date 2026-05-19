@@ -34,9 +34,10 @@ firmware **4.13+** (HSL3 / Python 3.9 logic-module SDK).
   `http://<hs-ip>:8080/` *from inside HSL3* — no external process.
   Manage discovered + manually-added players, browse a player's
   Favorites (FV:2) + audio inputs (AI:) + saved playlists (SQ:), edit
-  the global preset library, define group presets, set project-wide
-  Player Defaults (PollInterval / SubTimeout / HttpTimeout /
-  CallbackBase), authorize Sonos Cloud OAuth.
+  the global preset library — including join presets that make a
+  player follow a master speaker — define group presets, set
+  project-wide Player Defaults (PollInterval / SubTimeout /
+  HttpTimeout / CallbackBase), authorize Sonos Cloud OAuth.
 - **DHCP-resilient player references.** When Admin is present, LBS
   22000's `Host` input accepts UUID / MAC / name / IP. UUID is
   preferred — stable across firmware updates and DHCP renumbering.
@@ -55,7 +56,12 @@ firmware **4.13+** (HSL3 / Python 3.9 logic-module SDK).
   restarts via HSL3 retentive stores.
 - **Graceful degradation.** If a listener can't bind, modules fall
   back to timer-based status polling and keep working.
-- **88 unit tests** with a stubbed `Hsl3Framework`, runnable in CI.
+- **Join presets.** Create a preset in the Admin UI that joins another
+  speaker instead of playing a stream: name it, pick the master from
+  the dropdown, and that preset (triggerable via `StartRadio` /
+  `StartRadioName` / `PresetNextPrev`) makes this player follow the
+  master's playback.
+- **90 unit tests** with a stubbed `Hsl3Framework`, runnable in CI.
 
 ## Repository layout
 
@@ -124,7 +130,7 @@ on a machine that has the SDK.
 python3 tests/test_logic_modules.py
 ```
 
-88 tests covering: pure helpers (SOAP fault extraction, NOTIFY parsing,
+90 tests covering: pure helpers (SOAP fault extraction, NOTIFY parsing,
 URI normalisation, play-mode composition, transport-actions parsing,
 iso-8859-15 encoding), the
 `LogicModule` IO contract (string outputs are bytes, numeric outputs

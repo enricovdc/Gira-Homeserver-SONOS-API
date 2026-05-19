@@ -1486,6 +1486,53 @@ class TestPlayerStationFromAdmin(unittest.TestCase):
         self.assertEqual(f(""), "")
         self.assertEqual(f(None), "")
 
+    def test_is_group_join_uri_distinguishes_from_other_schemes(self):
+        """Only bare x-rincon:RINCON_xxx is the group-join scheme. The
+        sibling x-rincon-* hyphen-prefixed URIs all mean different
+        things and must NOT match."""
+        c = self.player._is_group_join_uri
+        self.assertTrue(c("x-rincon:RINCON_AABBCC112233"))
+        self.assertTrue(c("x-rincon:RINCON_ANY"))
+        # Hyphen-prefixed variants are different schemes and must miss.
+        self.assertFalse(c("x-rincon-stream:RINCON_AABB"))
+        self.assertFalse(c("x-rincon-mp3radio://stream"))
+        self.assertFalse(c("x-rincon-cpcontainer:1006206cspotify"))
+        self.assertFalse(c("x-rincon-queue:RINCON_xx#0"))
+        self.assertFalse(c("x-rincon-playlist:RINCON_xx#A:PL/foo"))
+        # And every other scheme misses too.
+        self.assertFalse(c("x-sonosapi-stream:s12345"))
+        self.assertFalse(c("http://stream.example.com/r.mp3"))
+        self.assertFalse(c(""))
+        self.assertFalse(c(None))
+
+    def test_action_start_radio_join_preset_skips_play(self):
+        """A preset whose URI is x-rincon:RINCON_<master> must dispatch
+        ONE SetAVTransportURI (the player becomes a slave) and NO Play
+        — slaves auto-inherit the master's transport state, so calling
+        Play would just error or duplicate. Verifies the join branch in
+        _action_start_radio."""
+        with self.admin._registry_lock:
+            self.admin._stations.clear()
+            self.admin._stations["j"] = {
+                "id": "j", "name": "Join Kitchen", "type": "join",
+                "uri": "x-rincon:RINCON_KITCHENAABB",
+                "metadata": "",
+            }
+        fw = StubFramework()
+        lm = self.player.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._host = "10.0.0.5"
+        calls = []
+        lm._soap = lambda s, a, e: (calls.append((a, e)) or (True, "", ""))
+        lm._action_start_radio(1)
+        actions = [a for (a, _e) in calls]
+        # Exactly one SOAP, exactly SetAVTransportURI — no Play.
+        self.assertEqual(actions, ["SetAVTransportURI"])
+        self.assertIn("x-rincon:RINCON_KITCHENAABB", calls[0][1])
+        # ActiveStation + ActiveStationName captured for the visualisation.
+        self.assertEqual(fw.outputs["ActiveStation"], 1.0)
+        self.assertEqual(fw.outputs["ActiveStationName"], b"Join Kitchen")
+
     def test_is_container_uri_recognises_playlist_schemes(self):
         """The dispatch from _action_start_radio uses _is_container_uri
         to decide between direct-play and queue-and-play. Container URIs

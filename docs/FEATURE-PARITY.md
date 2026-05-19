@@ -88,6 +88,7 @@ stores.
 | Cloud-service presets (TuneIn / Spotify / Apple) | `_action_start_radio` cloud path | Preserves the music-service binding from the captured `<r:resMD>` metadata — without it Sonos can't resolve the URI |
 | Container playback (playlists, saved queues, albums) | `_play_via_queue` | `RemoveAllTracksFromQueue` → `AddURIToQueue` → `SetAVTransportURI(x-rincon-queue:<uuid>#0)` → `Play`. Routed by `_is_container_uri` |
 | Cross-LBS station lookup | `get_station` / `get_station_uri` module-level helpers in the Admin | LBS 22000 calls via `sys.modules` lookup; returns the full record including metadata |
+| Group-join preset | Preset record with `uri="x-rincon:RINCON_<master>"` and `type="join"` | Admin UI offers a dedicated "Add join preset" form with a master dropdown so the integrator never types the URI by hand. The Player's `_is_group_join_uri` detects the bare `x-rincon:` scheme and dispatches `SetAVTransportURI` without a subsequent `Play` — slaves auto-inherit the master's transport state. Triggered like any other preset via `StartRadio` / `StartRadioName` / `PresetNextPrev`. |
 
 ## Group presets
 

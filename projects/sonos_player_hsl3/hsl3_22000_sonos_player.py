@@ -178,6 +178,20 @@ def _is_container_uri(uri):
     return any(uri.startswith(p) for p in CONTAINER_URI_PREFIXES)
 
 
+def _is_group_join_uri(uri):
+    """``x-rincon:RINCON_xxx`` — the URI scheme that joins a player to
+    another player's zone group. Distinct from ``x-rincon-stream:`` /
+    ``x-rincon-mp3radio:`` / ``x-rincon-cpcontainer:`` / ``x-rincon-queue:``
+    / ``x-rincon-playlist:`` which look similar but mean entirely
+    different things — those all start with ``x-rincon-`` (hyphen),
+    only the bare ``x-rincon:`` (colon) is the group-join scheme.
+    Used by `_action_start_radio` to skip the Play step: slaves inherit
+    the master's transport state, calling Play would just error."""
+    if not uri:
+        return False
+    return uri.startswith("x-rincon:") and not uri.startswith("x-rincon-")
+
+
 # Sonos extends the standard UPnP transport-state alphabet with a
 # ZPSTR_-prefixed family (BUFFERING, CONNECTING, PLAYING_TV, …). We
 # strip the prefix AND title-case the whole value so the State output
@@ -1247,6 +1261,20 @@ class LogicModule:
         # the caller used the numeric index or the preset name.
         active_idx = int(admin_rec.get("index") or 0)
         active_name = admin_rec.get("name", "") or ""
+
+        # Group-join preset: the URI is "x-rincon:RINCON_<master>". Sending
+        # it via SetAVTransportURI makes this player a slave of the
+        # master's zone group; the slave then auto-inherits the master's
+        # transport state, so we deliberately DON'T issue Play afterwards.
+        if _is_group_join_uri(uri):
+            envelope = ENV_SET_URI.replace("{uri}", _xml_escape(uri)) \
+                                  .replace("{meta}", "")
+            ok, _b, err = self._soap("AVTransport", "SetAVTransportURI", envelope)
+            if ok:
+                self.fw.run_in_context(self._mark_active_station, (active_idx, active_name))
+            else:
+                self.fw.run_in_context(self._write_error, (err or "JOIN_FAILED",))
+            return
 
         # Containers (Spotify/Apple playlists, Sonos saved queues, …)
         # cannot be SetAVTransportURI'd directly — they must be added to
