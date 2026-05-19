@@ -201,11 +201,21 @@ def resolve_host(spec):
 
 
 def get_station_uri(index_or_name):
-    """LBS 22000 can call this to resolve a station from the central library
-    instead of from its own per-instance Station<N>Uri inputs. Returns ''
-    when not found."""
+    """Backwards-compat shim. Prefer get_station() which returns the full
+    record including the DIDL-Lite metadata required for Sonos cloud
+    favorites (TuneIn, Spotify, Apple Music). Returns '' when not found."""
+    rec = get_station(index_or_name)
+    return rec["uri"] if rec else ""
+
+
+def get_station(index_or_name):
+    """LBS 22000 calls this to fetch the full station record. Returns None
+    when not found. The returned dict has the keys ``id``, ``name``,
+    ``uri`` and ``metadata`` — the last carries the DIDL-Lite XML
+    captured from a Sonos favorite so cloud-service items play correctly
+    (their music-service binding lives in the metadata, not in the URI)."""
     if index_or_name is None:
-        return ""
+        return None
     key = str(index_or_name).strip()
     with _registry_lock:
         # Numeric: index into sorted list.
@@ -213,13 +223,13 @@ def get_station_uri(index_or_name):
             idx = int(key)
             sorted_stations = sorted(_stations.values(), key=lambda s: s["name"].lower())
             if 1 <= idx <= len(sorted_stations):
-                return sorted_stations[idx - 1]["uri"]
-            return ""
+                return dict(sorted_stations[idx - 1])
+            return None
         # Name match (case-insensitive).
         for rec in _stations.values():
             if rec["name"].lower() == key.lower():
-                return rec["uri"]
-    return ""
+                return dict(rec)
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -351,6 +361,119 @@ def discover_and_merge(timeout_sec=4):
 
 
 # ---------------------------------------------------------------------------
+# ContentDirectory#Browse — used to walk a player's saved favorites,
+# playlists, and other content. The user already curated this list in the
+# Sonos app; surfacing it in the Admin UI is much friendlier than asking
+# the integrator to paste raw stream URIs.
+# ---------------------------------------------------------------------------
+
+ENV_BROWSE = (
+    '<?xml version="1.0" encoding="utf-8"?>'
+    '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">'
+    '<s:Body><u:Browse xmlns:u="urn:schemas-upnp-org:service:ContentDirectory:1">'
+    "<ObjectID>{object_id}</ObjectID>"
+    "<BrowseFlag>BrowseDirectChildren</BrowseFlag>"
+    "<Filter>*</Filter>"
+    "<StartingIndex>{start}</StartingIndex>"
+    "<RequestedCount>{count}</RequestedCount>"
+    "<SortCriteria></SortCriteria>"
+    "</u:Browse></s:Body></s:Envelope>"
+)
+
+
+def _unescape_xml(s):
+    """XML-entity decode. Sonos wraps Browse responses in double XML
+    escaping — call this twice for the inner DIDL-Lite payload."""
+    if s is None:
+        return ""
+    return (s.replace("&lt;", "<")
+             .replace("&gt;", ">")
+             .replace("&quot;", '"')
+             .replace("&apos;", "'")
+             .replace("&amp;", "&"))
+
+
+def _extract_tag(xml, tag):
+    """Return the inner text of <tag>...</tag> (handles namespaced tags)
+    or '' when not present. Does NOT XML-unescape — callers decide."""
+    m = re.search(r"<{t}[^>]*>([\s\S]*?)</{t}>".format(t=re.escape(tag)), xml)
+    return m.group(1) if m else ""
+
+
+def _parse_didl_items(didl_xml):
+    """Pull out every <item> block from a DIDL-Lite envelope. For each item
+    we capture title, upnp:class, the playback URI (<res>) and the music-
+    service metadata (<r:resMD>) verbatim. resMD is itself an escaped
+    DIDL-Lite string that the player must receive UNCHANGED."""
+    items = []
+    for m in re.finditer(r"<item\b[^>]*>([\s\S]*?)</item>", didl_xml):
+        inner = m.group(1)
+        title = _unescape_xml(_extract_tag(inner, "dc:title"))
+        upnp_class = _extract_tag(inner, "upnp:class")
+        # <res> can have attributes (protocolInfo, duration, …) — strip them.
+        res = _unescape_xml(_extract_tag(inner, "res"))
+        # <r:resMD> is the canonical metadata for a Sonos favorite — the
+        # exact value to pass to SetAVTransportURI's CurrentURIMetaData
+        # so the player knows which music service binding to use.
+        res_md_raw = _extract_tag(inner, "r:resMD")
+        res_md = _unescape_xml(res_md_raw) if res_md_raw else ""
+        if not (title and res):
+            continue
+        items.append({
+            "title": title,
+            "class": upnp_class,
+            "uri": res,
+            "metadata": res_md,
+            "type": _classify(upnp_class, res),
+        })
+    return items
+
+
+def _classify(upnp_class, uri):
+    """Friendly category label so the UI can group items."""
+    c = (upnp_class or "").lower()
+    if "audiobroadcast" in c:
+        return "radio"
+    if "playlistcontainer" in c or "album.musicalbum" in c:
+        return "playlist"
+    if "musictrack" in c:
+        return "track"
+    if uri.startswith("x-rincon-mp3radio") or uri.startswith("x-sonosapi-stream"):
+        return "radio"
+    return "other"
+
+
+def browse_content(host, object_id="FV:2", start=0, count=200, timeout=5):
+    """Run ContentDirectory#Browse against the player. Returns the parsed
+    item list (possibly empty on errors — we never raise to the API layer
+    because a slow / offline player must not crash the web UI)."""
+    if not host:
+        return []
+    headers = {
+        "Content-Type": 'text/xml; charset="utf-8"',
+        "SOAPACTION": '"urn:schemas-upnp-org:service:ContentDirectory:1#Browse"',
+    }
+    envelope = ENV_BROWSE.format(object_id=object_id, start=start, count=count)
+    try:
+        resp = requests.post(
+            "http://{}:1400/MediaServer/ContentDirectory/Control".format(host),
+            data=envelope.encode("utf-8"),
+            headers=headers,
+            timeout=timeout,
+        )
+    except requests.exceptions.RequestException:
+        return []
+    if resp.status_code != 200:
+        return []
+    # The response Result is XML-escaped DIDL-Lite text wrapped in <Result>.
+    result_match = re.search(r"<Result>([\s\S]*?)</Result>", resp.text)
+    if not result_match:
+        return []
+    didl = _unescape_xml(result_match.group(1))
+    return _parse_didl_items(didl)
+
+
+# ---------------------------------------------------------------------------
 # HTTP server
 # ---------------------------------------------------------------------------
 
@@ -467,6 +590,21 @@ code { background: #f5f5f5; padding: 1px 6px; border: 1px solid #e8e8e8;
   .player-card .pc-grid { grid-template-columns: 1fr 1fr; }
   .player-card .pc-actions { grid-column: 1 / -1; justify-content: flex-end; }
 }
+/* Inline favorites pane, shown when "Favorites" is clicked on a card */
+.pc-favs:empty { display: none; }
+.pc-favs { margin-top: 10px; padding: 8px 12px; background: #f5f5f5;
+           border: 1px solid #e0e0e0; }
+.favs-head { font-size: 11px; color: #505050; margin-bottom: 6px;
+             padding-bottom: 4px; border-bottom: 1px solid #e0e0e0; }
+.favs-head .muted { font-weight: normal; color: #808080; }
+.favs-empty { font-size: 12px; color: #808080; font-style: italic; padding: 4px 0; }
+.fav-row { display: grid; grid-template-columns: 60px 1fr auto;
+           gap: 10px; align-items: center; padding: 4px 0;
+           border-bottom: 1px solid #ececec; }
+.fav-row:last-child { border-bottom: 0; }
+.fav-type { font-size: 10px; text-transform: uppercase; color: #707070;
+            letter-spacing: 0.5px; }
+.fav-title { font-size: 12px; color: #202020; word-break: break-word; }
 
 /* Two-column "grid" used by the Cloud section */
 .grid { display: grid; grid-template-columns: 224px 1fr; gap: 6px 12px;
@@ -608,12 +746,14 @@ async function refreshPlayers() {
         '</div>' +
         '<div class="pc-actions">' +
           '<button class="secondary small" data-host="' + esc(hostValue) + '" title="Copy Host value">Use as Host</button>' +
+          '<button class="secondary small" data-favs="' + esc(p.id) + '" title="Browse Sonos Favorites on this player">Favorites</button>' +
           '<button class="danger small" data-del-player="' + esc(p.id) + '" title="Remove">x</button>' +
         '</div>' +
       '</div>' +
       '<div class="pc-meta">' +
         (p.model ? '<span class="pc-model">' + esc(p.model) + '</span>' : '') +
-      '</div>';
+      '</div>' +
+      '<div class="pc-favs" id="favs-' + esc(p.id) + '"></div>';
     list.appendChild(card);
   }
   if (r.players.length === 0) {
@@ -694,8 +834,54 @@ document.addEventListener('click', async (ev) => {
         prompt('Copy this value into the Sonos Player Host input:', v);
       }
     }
+    if (t.dataset.favs) {
+      await toggleFavorites(t.dataset.favs, t);
+    }
+    if (t.dataset.addFavStation) {
+      // Encoded payload {title, uri, metadata} (base64-JSON, URI-safe).
+      const payload = JSON.parse(decodeURIComponent(escape(atob(t.dataset.addFavStation))));
+      await api('POST', '/api/stations', payload);
+      toast('Added: ' + payload.name);
+      refreshStations();
+    }
   } catch (e) { toast(e.message, true); }
 });
+
+async function toggleFavorites(pid, btn) {
+  const container = document.getElementById('favs-' + pid);
+  if (!container) return;
+  if (container.dataset.open === '1') {
+    container.innerHTML = '';
+    container.dataset.open = '0';
+    btn.textContent = 'Favorites';
+    return;
+  }
+  btn.textContent = 'Loading...';
+  let r;
+  try { r = await api('GET', '/api/players/' + encodeURIComponent(pid) + '/favorites'); }
+  catch (e) { btn.textContent = 'Favorites'; toast(e.message, true); return; }
+  btn.textContent = 'Hide favorites';
+  container.dataset.open = '1';
+  if (!r.favorites.length) {
+    container.innerHTML = '<div class="favs-empty">No favorites on this player. Save some in the Sonos app first.</div>';
+    return;
+  }
+  let html = '<div class="favs-head">Sonos Favorites on this player ' +
+             '<span class="muted">(' + r.favorites.length + ')</span></div>';
+  for (const f of r.favorites) {
+    // Encode the whole record so the Add click handler can POST it back
+    // unchanged (preserving the music-service metadata verbatim).
+    const payload = btoa(unescape(encodeURIComponent(JSON.stringify({
+      name: f.title, uri: f.uri, metadata: f.metadata
+    }))));
+    html += '<div class="fav-row">' +
+              '<span class="fav-type">' + esc(f.type || '') + '</span>' +
+              '<span class="fav-title">' + esc(f.title) + '</span>' +
+              '<button class="small" data-add-fav-station="' + payload + '">Add to stations</button>' +
+            '</div>';
+  }
+  container.innerHTML = html;
+}
 document.getElementById('np-add').addEventListener('click', async () => {
   const name = document.getElementById('np-name').value.trim();
   const ip = document.getElementById('np-ip').value.trim();
@@ -881,7 +1067,19 @@ class _AdminHandler(BaseHTTPRequestHandler):
                 return self._send(200, _tile_fragment(base), "text/html; charset=utf-8")
             if path == "/icon.svg":
                 return self._send(200, _icon_svg(), "image/svg+xml")
+            m = re.match(r"^/api/players/(.+)/favorites$", path)
+            if m:
+                pid = urllib.parse.unquote(m.group(1))
+                return self._send(200, self.server.admin.api_player_favorites(pid))
+            m = re.match(r"^/api/players/(.+)/playlists$", path)
+            if m:
+                pid = urllib.parse.unquote(m.group(1))
+                return self._send(200, self.server.admin.api_player_playlists(pid))
             self._err(404, "NOT_FOUND", "no such route")
+        except ValueError as exc:
+            # Domain-validation errors (unknown player id, missing IP, …)
+            # are caller-visible 400s, not server-side 500s.
+            self._err(400, "INVALID_ARG", str(exc))
         except Exception as exc:  # noqa: BLE001
             self._err(500, "INTERNAL", str(exc))
 
@@ -1243,14 +1441,41 @@ class LogicModule:
     def api_add_station(self, body):
         name = (body.get("name") or "").strip()
         uri = (body.get("uri") or "").strip()
+        metadata = body.get("metadata") or ""
         if not name or not uri:
             raise ValueError("name and uri required")
         sid = "s_" + str(int(time.time() * 1000))
-        rec = {"id": sid, "name": name, "uri": uri}
+        rec = {"id": sid, "name": name, "uri": uri, "metadata": metadata}
         with _registry_lock:
             _stations[sid] = rec
         self._publish_counters()
         return {"ok": True, "station": rec}
+
+    def api_player_favorites(self, pid):
+        """Return the player's Sonos Favorites (the FV:2 container in
+        UPnP ContentDirectory). Each item carries the playback URI and
+        the music-service metadata required for cloud favorites."""
+        with _registry_lock:
+            rec = _players.get(pid)
+        if rec is None:
+            raise ValueError("unknown player id")
+        ip = rec.get("ip", "")
+        if not ip:
+            raise ValueError("player has no IP — run discovery first")
+        items = browse_content(ip, "FV:2", count=200)
+        return {"ok": True, "playerId": pid, "favorites": items}
+
+    def api_player_playlists(self, pid):
+        """Return the player's saved Sonos Playlists (SQ:)."""
+        with _registry_lock:
+            rec = _players.get(pid)
+        if rec is None:
+            raise ValueError("unknown player id")
+        ip = rec.get("ip", "")
+        if not ip:
+            raise ValueError("player has no IP — run discovery first")
+        items = browse_content(ip, "SQ:", count=200)
+        return {"ok": True, "playerId": pid, "playlists": items}
 
     def api_update_station(self, sid, body):
         with _registry_lock:
@@ -1259,6 +1484,8 @@ class LogicModule:
                 raise ValueError("unknown station id")
             if "name" in body:
                 rec["name"] = (body["name"] or "").strip()
+            if "metadata" in body:
+                rec["metadata"] = body["metadata"] or ""
             if "uri" in body:
                 rec["uri"] = (body["uri"] or "").strip()
         return {"ok": True}

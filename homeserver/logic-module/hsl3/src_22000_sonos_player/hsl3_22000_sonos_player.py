@@ -100,9 +100,40 @@ ENV_SET_URI = (
     '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">'
     '<s:Body><u:SetAVTransportURI xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
     "<InstanceID>0</InstanceID><CurrentURI>{uri}</CurrentURI>"
-    "<CurrentURIMetaData></CurrentURIMetaData></u:SetAVTransportURI>"
+    "<CurrentURIMetaData>{meta}</CurrentURIMetaData></u:SetAVTransportURI>"
     "</s:Body></s:Envelope>"
 )
+
+
+def _xml_escape(s):
+    """Escape a string for inclusion as XML element content. The URI and
+    metadata both go inside elements (not attributes) so this is enough."""
+    if not s:
+        return ""
+    return (s.replace("&", "&amp;")
+             .replace("<", "&lt;")
+             .replace(">", "&gt;")
+             .replace('"', "&quot;")
+             .replace("'", "&apos;"))
+
+
+def _lookup_station_via_admin(idx_or_name):
+    """If the Sonos Admin LBS is loaded, ask it for the full station
+    record (uri + metadata + name). Returns None when Admin isn't
+    present or doesn't know the station."""
+    for mod_name, mod in list(sys.modules.items()):
+        if mod is None:
+            continue
+        if "sonos_admin" in mod_name or "hsl3_22001" in mod_name:
+            fn = getattr(mod, "get_station", None)
+            if callable(fn):
+                try:
+                    rec = fn(idx_or_name)
+                    if rec and rec.get("uri"):
+                        return rec
+                except Exception:
+                    pass
+    return None
 
 SERVICE_PATHS = {
     "AVTransport":      "/MediaRenderer/AVTransport/Control",
@@ -648,12 +679,39 @@ class LogicModule:
         self._action_set_mute(not current)
 
     def _action_start_radio(self, idx):
-        uri = self._stations.get(idx, "") or ""
+        # Resolution order: Admin's global station library first (carries
+        # the DIDL-Lite metadata needed for Sonos cloud favorites like
+        # TuneIn and Spotify), falling back to the per-player StationNUri
+        # input when no Admin block is present.
+        admin_rec = _lookup_station_via_admin(idx)
+        uri = (admin_rec or {}).get("uri") or self._stations.get(idx, "") or ""
+        metadata = (admin_rec or {}).get("metadata") or ""
         if not uri:
             self.fw.run_in_context(self._write_error, ("STATION_{}_NOT_CONFIGURED".format(idx),))
             return
+
+        if metadata:
+            # Cloud-bound favorite: the music-service binding (TuneIn,
+            # Spotify…) lives inside the metadata. Do NOT try the empty-
+            # metadata fallback — Sonos would lose the service binding.
+            envelope = ENV_SET_URI.replace("{uri}", _xml_escape(uri)) \
+                                  .replace("{meta}", _xml_escape(metadata))
+            ok, _b, err = self._soap("AVTransport", "SetAVTransportURI", envelope)
+            if ok:
+                play_ok, _b2, play_err = self._soap("AVTransport", "Play", ENV_PLAY)
+                if play_ok:
+                    self.fw.run_in_context(self._mark_active_station, (idx,))
+                else:
+                    self.fw.run_in_context(self._write_error, (play_err,))
+                return
+            self.fw.run_in_context(self._write_error, (err or "RADIO_START_FAILED",))
+            return
+
+        # Direct stream (manual URI): the original firmware-2026-resilient
+        # fallback ladder — empty metadata first, then raw URI.
         for candidate in (normalize_radio_uri(uri), uri):
-            envelope = ENV_SET_URI.replace("{uri}", candidate)
+            envelope = ENV_SET_URI.replace("{uri}", _xml_escape(candidate)) \
+                                  .replace("{meta}", "")
             ok, _body, err = self._soap("AVTransport", "SetAVTransportURI", envelope)
             if ok:
                 play_ok, _b, play_err = self._soap("AVTransport", "Play", ENV_PLAY)

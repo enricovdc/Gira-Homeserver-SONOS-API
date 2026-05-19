@@ -399,6 +399,93 @@ class TestSonosAdmin(unittest.TestCase):
         self.assertEqual(listing["players"][0]["zoneName"], "Kitchen")
         self.assertEqual(listing["players"][0]["uuid"], "RINCON_DEAD")
 
+    def test_parse_didl_items_extracts_favorites(self):
+        """The Browse(FV:2) response wraps DIDL-Lite items. The parser must
+        pull out title, URI, music-service metadata, and classify by type."""
+        sample = (
+            '<DIDL-Lite xmlns:dc="http://purl.org/dc/elements/1.1/" '
+            'xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/" '
+            'xmlns:r="urn:schemas-rinconnetworks-com:metadata-1-0/" '
+            'xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/">'
+            '<item id="FV:2/0" parentID="FV:2" restricted="true">'
+            '<dc:title>BBC Radio 1</dc:title>'
+            '<upnp:class>object.itemobject.item.sonos-favorite</upnp:class>'
+            '<res protocolInfo="x-sonosapi-stream:*:audio/x-rincon-mp3radio:*">'
+            'x-sonosapi-stream:s24939?sid=254&amp;flags=8224&amp;sn=0</res>'
+            '<r:resMD>&lt;DIDL-Lite&gt;&lt;item&gt;&lt;dc:title&gt;BBC Radio 1'
+            '&lt;/dc:title&gt;&lt;upnp:class&gt;object.item.audioItem.audioBroadcast'
+            '&lt;/upnp:class&gt;&lt;desc id=&quot;cdudn&quot;&gt;'
+            'SA_RINCON65031_X_#Svc65031-0&lt;/desc&gt;&lt;/item&gt;&lt;/DIDL-Lite&gt;'
+            '</r:resMD>'
+            '</item>'
+            '<item id="FV:2/1" parentID="FV:2" restricted="true">'
+            '<dc:title>Local Stream</dc:title>'
+            '<upnp:class>object.item.audioItem.audioBroadcast</upnp:class>'
+            '<res>x-rincon-mp3radio://stream.example.com/r1.mp3</res>'
+            '</item>'
+            '</DIDL-Lite>'
+        )
+        items = self.mod._parse_didl_items(sample)
+        self.assertEqual(len(items), 2)
+        # First item: TuneIn-bound favorite with full metadata
+        self.assertEqual(items[0]["title"], "BBC Radio 1")
+        self.assertEqual(items[0]["type"], "radio")
+        self.assertIn("x-sonosapi-stream:s24939", items[0]["uri"])
+        # & should be decoded back to its literal form
+        self.assertIn("&", items[0]["uri"])
+        # The metadata must survive the round-trip with the SMAPI binding
+        self.assertIn("SA_RINCON65031", items[0]["metadata"])
+        self.assertIn("audioBroadcast", items[0]["metadata"])
+        # Second item: direct stream, no metadata
+        self.assertEqual(items[1]["title"], "Local Stream")
+        self.assertEqual(items[1]["type"], "radio")
+        self.assertEqual(items[1]["metadata"], "")
+        self.assertEqual(items[1]["uri"], "x-rincon-mp3radio://stream.example.com/r1.mp3")
+
+    def test_get_station_returns_metadata(self):
+        """LBS 22000 uses get_station() to retrieve the full record."""
+        with self.mod._registry_lock:
+            self.mod._stations["s1"] = {
+                "id": "s1", "name": "BBC R1",
+                "uri": "x-sonosapi-stream:s12345?sid=254",
+                "metadata": "<DIDL-Lite>...SMAPI...</DIDL-Lite>",
+            }
+        rec = self.mod.get_station("BBC R1")
+        self.assertEqual(rec["uri"], "x-sonosapi-stream:s12345?sid=254")
+        self.assertIn("SMAPI", rec["metadata"])
+        # Numeric index lookup also returns metadata.
+        rec2 = self.mod.get_station(1)
+        self.assertEqual(rec2["name"], "BBC R1")
+
+    def test_get_station_uri_shim_unchanged(self):
+        """Backwards-compat shim still returns just the URI string."""
+        with self.mod._registry_lock:
+            self.mod._stations["s1"] = {
+                "id": "s1", "name": "X", "uri": "http://x", "metadata": "<meta/>"
+            }
+        self.assertEqual(self.mod.get_station_uri("X"), "http://x")
+        self.assertEqual(self.mod.get_station_uri("missing"), "")
+
+    def test_api_player_favorites_unknown_player(self):
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        with self.assertRaises(ValueError):
+            lm.api_player_favorites("nope")
+
+    def test_api_add_station_carries_metadata(self):
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        r = lm.api_add_station({
+            "name": "Spotify Playlist",
+            "uri": "x-rincon-cpcontainer:1004206cspotify:playlist:abc",
+            "metadata": "<DIDL-Lite>...spotify-binding...</DIDL-Lite>",
+        })
+        self.assertEqual(r["station"]["metadata"], "<DIDL-Lite>...spotify-binding...</DIDL-Lite>")
+        with self.mod._registry_lock:
+            self.assertIn("metadata", self.mod._stations[r["station"]["id"]])
+
     def test_fetch_device_info_parses_roomname_and_model(self):
         """The new _fetch_device_info helper extracts both <roomName> and
         <modelName> from a Sonos device description XML — needed so the
@@ -518,6 +605,43 @@ class TestSonosAdmin(unittest.TestCase):
         self.assertEqual(params["client_id"], "abc")
         self.assertEqual(params["redirect_uri"], "http://hs:8080/oauth/callback")
         self.assertEqual(params["response_type"], "code")
+
+
+class TestPlayerStationFromAdmin(unittest.TestCase):
+    """When the Admin LBS exposes a station with metadata, the Player
+    module must pass the metadata through verbatim — it's the music-
+    service binding for TuneIn / Spotify / Apple Music favorites."""
+
+    @classmethod
+    def setUpClass(cls):
+        sys.modules.setdefault("requests", _make_requests_stub())
+        cls.admin = load_module(ADMIN_PY, "sonos_admin_22001_for_stations")
+        cls.player = load_module(PLAYER_PY, "sonos_player_22000_for_stations")
+
+    def setUp(self):
+        with self.admin._registry_lock:
+            self.admin._stations.clear()
+
+    def test_lookup_station_via_admin_returns_dict_with_metadata(self):
+        with self.admin._registry_lock:
+            self.admin._stations["s"] = {
+                "id": "s", "name": "TuneIn", "uri": "x-sonosapi-stream:s24939",
+                "metadata": "<DIDL-Lite>...SA_RINCON65031...</DIDL-Lite>",
+            }
+        rec = self.player._lookup_station_via_admin(1)
+        self.assertEqual(rec["uri"], "x-sonosapi-stream:s24939")
+        self.assertIn("SA_RINCON65031", rec["metadata"])
+
+    def test_lookup_station_via_admin_returns_none_when_empty(self):
+        self.assertIsNone(self.player._lookup_station_via_admin(1))
+
+    def test_xml_escape_handles_uri_with_ampersand(self):
+        """SetAVTransportURI URIs frequently contain & (cloud query params).
+        The XML envelope embeds them in element content so they must be
+        escaped to &amp; or the SOAP body is malformed."""
+        escaped = self.player._xml_escape("x-sonosapi-stream:s1?sid=254&flags=8224")
+        self.assertIn("&amp;", escaped)
+        self.assertNotIn("&f", escaped)  # the literal & must be gone
 
 
 class TestPlayerHostResolution(unittest.TestCase):
