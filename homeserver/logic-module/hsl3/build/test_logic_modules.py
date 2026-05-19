@@ -456,9 +456,9 @@ class TestSonosAdmin(unittest.TestCase):
         self.assertEqual(self.mod._classify("object.item.audioItem.audioInput", "anything"), "source")
 
     def test_api_player_favorites_prepends_line_in_source(self):
-        """The favorites endpoint must inject a synthetic Line-In entry
-        at the top of the list so the integrator can save it as a
-        preset and play it from any other player."""
+        """When AI: returns nothing (older firmware) the favorites
+        endpoint falls back to a synthetic Line-In entry built from the
+        player's UUID so cross-room source routing still works."""
         fw = StubFramework()
         lm = self.mod.LogicModule(fw)
         lm.debug = fw.create_debug_section()
@@ -468,7 +468,7 @@ class TestSonosAdmin(unittest.TestCase):
                 "ip": "10.0.0.50", "mac": "", "uuid": "RINCON_AABBCC",
                 "model": "Connect:Amp", "source": "ssdp",
             }
-        # Stub the SOAP browse so favourites is empty (offline player ok).
+        # Stub the SOAP browse so both FV:2 and AI: return nothing.
         original = self.mod.browse_content
         try:
             self.mod.browse_content = lambda *a, **kw: []
@@ -480,6 +480,69 @@ class TestSonosAdmin(unittest.TestCase):
         self.assertEqual(first["type"], "source")
         self.assertEqual(first["title"], "Line-In (Living Room)")
         self.assertEqual(first["uri"], "x-rincon-stream:RINCON_AABBCC")
+
+    def test_api_player_favorites_includes_real_ai_browse(self):
+        """When AI: returns real audio-input items (Line-In on Connect,
+        Bluetooth on Era 100, TV on Beam, …) they're each tagged
+        type=source, the zone name is appended to the title, and the
+        synthetic fallback is NOT added. The order is sources first,
+        then FV:2 favorites."""
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        with self.mod._registry_lock:
+            self.mod._players["era"] = {
+                "id": "era", "name": "era", "zoneName": "Living Room",
+                "ip": "10.0.0.50", "mac": "", "uuid": "RINCON_ERA",
+                "model": "Era 100", "source": "ssdp",
+            }
+        original = self.mod.browse_content
+        try:
+            # browse_content(ip, object_id, ...) — return different
+            # lists for FV:2 vs AI: so we can verify both reach the
+            # response.
+            def fake_browse(ip, object_id="FV:2", **_kw):
+                if object_id == "AI:":
+                    return [
+                        {"title": "Line-In", "class": "object.item.audioItem.audioBroadcast",
+                         "uri": "x-rincon-stream:RINCON_ERA", "metadata": "", "type": "radio"},
+                        {"title": "Bluetooth", "class": "object.item.audioItem.audioInput",
+                         "uri": "x-sonos-bt:RINCON_ERA", "metadata": "", "type": "source"},
+                    ]
+                if object_id == "FV:2":
+                    return [
+                        {"title": "BBC R1", "class": "object.itemobject.item.sonos-favorite",
+                         "uri": "x-sonosapi-stream:s1", "metadata": "<DIDL/>", "type": "radio"},
+                    ]
+                return []
+            self.mod.browse_content = fake_browse
+            r = lm.api_player_favorites("era")
+        finally:
+            self.mod.browse_content = original
+        self.assertEqual(len(r["favorites"]), 3)
+        # First two are sources (with zone name appended) and BOTH must
+        # be tagged source even though one had upnp class audioBroadcast.
+        self.assertEqual(r["favorites"][0]["title"], "Line-In (Living Room)")
+        self.assertEqual(r["favorites"][0]["type"], "source")
+        self.assertEqual(r["favorites"][1]["title"], "Bluetooth (Living Room)")
+        self.assertEqual(r["favorites"][1]["type"], "source")
+        # Third is the radio favorite, untouched.
+        self.assertEqual(r["favorites"][2]["title"], "BBC R1")
+        self.assertEqual(r["favorites"][2]["type"], "radio")
+
+    def test_api_add_station_captures_optional_type(self):
+        """When the integrator adds a favorite as a preset the type tag
+        (source/radio/playlist/track) is captured so the Presets table
+        can render it. Existing callers that omit type don't break;
+        record just has type=""."""
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        r = lm.api_add_station({"name": "BT", "uri": "x-sonos-bt:X",
+                                "metadata": "", "type": "source"})
+        self.assertEqual(r["station"]["type"], "source")
+        r2 = lm.api_add_station({"name": "Manual", "uri": "http://x"})
+        self.assertEqual(r2["station"]["type"], "")
 
     def test_parse_didl_items_extracts_spotify_playlist_favorite(self):
         """Sonos favorites for Spotify playlists are wrapped in the

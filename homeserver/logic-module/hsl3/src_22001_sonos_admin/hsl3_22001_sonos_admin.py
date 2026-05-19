@@ -758,14 +758,19 @@ details.group-add .row { margin-top: 6px; }
         margin-bottom: 8px; }
 .grid > label { font-size: 12px; color: #505050; align-self: center; }
 
-/* Footers, mirroring the HS index page */
+/* Footers, mirroring the HS index page (/main-site/hs.css conventions:
+   light-grey upper bar with version-info+links, slightly-darker bar
+   beneath with API-link helpers in muted text). */
 .footer1 { display: flex; background-color: #f5f5f5; padding: 10px 30px;
-           font-size: 14px; height: 24px; line-height: 24px; }
-.footer1 > .left  { display: inline; width: 60%; }
-.footer1 > .right { display: inline; width: 40%; text-align: right; }
+           font-size: 14px; line-height: 24px; margin-top: 30px; }
+.footer1 > .left  { flex: 1 1 60%; }
+.footer1 > .right { flex: 0 0 40%; text-align: right; }
+.footer1 a { color: #505050; text-decoration: none; }
+.footer1 a:hover { color: #BACE00; }
 .footer2 { background-color: rgb(230,230,230); padding: 10px 30px;
-           font-size: 12px; color: #808080; }
+           font-size: 14px; color: #808080; }
 .footer2 > a { color: inherit; text-decoration: none; margin-right: 18px; }
+.footer2 > a:hover { color: #505050; }
 </style>
 </head>
 <body>
@@ -806,11 +811,12 @@ details.group-add .row { margin-top: 6px; }
     </p>
     <table id="stations">
       <thead><tr>
-        <th style="width:6%">#</th>
+        <th style="width:5%">#</th>
+        <th style="width:9%">Type</th>
         <th style="width:24%">Name</th>
         <th>Stream URI</th>
-        <th style="width:8%">Meta</th>
-        <th style="width:10%">Actions</th>
+        <th style="width:7%">Meta</th>
+        <th style="width:8%">Actions</th>
       </tr></thead><tbody></tbody>
     </table>
     <div class="row">
@@ -982,8 +988,10 @@ async function refreshStations() {
   sorted.forEach((s, i) => {
     const tr = document.createElement('tr');
     const hasMeta = !!(s.metadata && s.metadata.length > 0);
+    const ptype = s.type || '';
     tr.innerHTML =
       '<td><strong>' + (i + 1) + '</strong></td>' +
+      '<td>' + (ptype ? '<span class="fav-type">' + esc(ptype) + '</span>' : '<span class="muted">—</span>') + '</td>' +
       '<td><input data-sedit="' + esc(s.id) + '" data-field="name" value="' + esc(s.name) + '"></td>' +
       '<td><input data-sedit="' + esc(s.id) + '" data-field="uri"  value="' + esc(s.uri)  + '"></td>' +
       '<td>' + (hasMeta ? '<span class="pill ssdp" title="Has music-service metadata">yes</span>' : '<span class="muted">—</span>') + '</td>' +
@@ -991,7 +999,7 @@ async function refreshStations() {
     tbody.appendChild(tr);
   });
   if (!sorted.length) {
-    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#808080;padding:12px">' +
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#808080;padding:12px">' +
       'No presets yet. Add one above, or click <strong>Favorites</strong> on a player to import.' +
       '</td></tr>';
   }
@@ -1249,8 +1257,17 @@ async function toggleFavorites(pid, btn) {
   btn.textContent = 'Hide';
   container.dataset.open = '1';
 
+  // /api/players/<id>/favorites returns AI: sources (Line-In,
+  // Bluetooth, TV, ...) intermixed with FV:2 favorites. Split them so
+  // the UI shows three groups: Player sources first, then favorites,
+  // then saved playlists.
+  const _sources = [], _favs = [];
+  for (const f of (favs.favorites || [])) {
+    (f.type === 'source' ? _sources : _favs).push(f);
+  }
   const all = [
-    ...(favs.favorites || []).map(f => ({...f, group: 'Sonos Favorites'})),
+    ..._sources.map(f => ({...f, group: 'Player sources'})),
+    ..._favs.map(f => ({...f, group: 'Sonos Favorites'})),
     ...(pls.playlists || []).map(f => ({...f, group: 'Sonos Playlists'})),
   ];
 
@@ -1274,7 +1291,7 @@ async function toggleFavorites(pid, btn) {
       // Encode the whole record so the Add click handler can POST it back
       // unchanged (preserving the music-service metadata verbatim).
       const payload = btoa(unescape(encodeURIComponent(JSON.stringify({
-        name: f.title, uri: f.uri, metadata: f.metadata
+        name: f.title, uri: f.uri, metadata: f.metadata, type: f.type || ''
       }))));
       html += '<div class="fav-row">' +
                 '<span class="fav-type">' + esc(f.type || 'other') + '</span>' +
@@ -1975,26 +1992,35 @@ class LogicModule:
         name = (body.get("name") or "").strip()
         uri = (body.get("uri") or "").strip()
         metadata = body.get("metadata") or ""
+        # Optional type tag captured from the favorite at add time
+        # (radio / playlist / source / track / …). Shown in the presets
+        # table; never affects playback dispatch (the Player block
+        # routes by URI scheme, not by this label).
+        ptype = (body.get("type") or "").strip()
         if not name or not uri:
             raise ValueError("name and uri required")
         sid = "s_" + str(int(time.time() * 1000))
-        rec = {"id": sid, "name": name, "uri": uri, "metadata": metadata}
+        rec = {"id": sid, "name": name, "uri": uri,
+               "metadata": metadata, "type": ptype}
         with _registry_lock:
             _stations[sid] = rec
         self._sync_async()
         return {"ok": True, "station": rec}
 
     def api_player_favorites(self, pid):
-        """Return the player's Sonos Favorites (the FV:2 container in
-        UPnP ContentDirectory). Each item carries the playback URI and
-        the music-service metadata required for cloud favorites.
+        """Return the player's Sonos Favorites (FV:2) plus its audio
+        inputs (AI:). The latter is the canonical way to enumerate
+        whatever audio sources the device actually exposes — Line-In on
+        a Connect:Amp / Port / Five, Bluetooth on an Era 100 / Era 300
+        / Move / Roam, TV input on a Beam / Arc, etc.
 
-        Synthetic entry on top: the player's own line-in source. Every
-        Sonos Connect:Amp, Port, Five, Beam, Arc (and a few others)
-        exposes its analogue input as ``x-rincon-stream:<that-player's-UUID>``.
-        Other players can consume the source by setting that URI. Saving
-        it as a preset lets the integrator pipe "Living Room Connect:Amp
-        line-in" into "Kitchen" with one trigger."""
+        Each AI: item is tagged with ``type=source`` (regardless of
+        what UPnP class Sonos used) and the player's zone name is
+        appended to the title so it's obvious which device the input
+        belongs to when the same preset is wired across multiple
+        players. Older firmware that doesn't expose AI: falls back to
+        a synthetic ``Line-In`` entry built from the player's UUID so
+        the integration still has *something* to bind to."""
         with _registry_lock:
             rec = _players.get(pid)
         if rec is None:
@@ -2002,19 +2028,36 @@ class LogicModule:
         ip = rec.get("ip", "")
         if not ip:
             raise ValueError("player has no IP — run discovery first")
-        items = browse_content(ip, "FV:2", count=200)
-        # Prepend the line-in source so it appears at the top of the
-        # Favorites pane in the Admin UI.
-        if rec.get("uuid"):
-            zone = rec.get("zoneName") or rec.get("name") or rec.get("ip") or "Player"
-            items.insert(0, {
+        favorites = browse_content(ip, "FV:2", count=200)
+        sources = browse_content(ip, "AI:", count=20)
+
+        zone = rec.get("zoneName") or rec.get("name") or rec.get("ip") or "Player"
+
+        # AI: items vary across hardware: Sonos uses several upnp:class
+        # values for inputs (audioBroadcast on legacy, audioInput on
+        # newer). Force the type tag so the UI groups them as sources
+        # regardless of the wire format. Tag the title with the zone so
+        # cross-room source routing is unambiguous.
+        for s in sources:
+            base = s.get("title") or "Source"
+            s["title"] = "{} ({})".format(base, zone)
+            s["type"] = "source"
+
+        # Back-compat: very old firmware doesn't expose AI:, in which
+        # case fall back to the synthetic Line-In entry built from the
+        # player's RINCON UUID — works for Connect:Amp / Port / Five
+        # but not for any input other than the analogue line.
+        if not sources and rec.get("uuid"):
+            sources = [{
                 "title": "Line-In ({})".format(zone),
                 "class": "object.item.audioItem.audioInput",
                 "uri": "x-rincon-stream:{}".format(rec["uuid"]),
                 "metadata": "",
                 "type": "source",
-            })
-        return {"ok": True, "playerId": pid, "favorites": items}
+            }]
+
+        return {"ok": True, "playerId": pid,
+                "favorites": sources + favorites}
 
     def api_player_playlists(self, pid):
         """Return the player's saved Sonos Playlists (SQ:)."""
