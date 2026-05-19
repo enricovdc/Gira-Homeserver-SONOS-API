@@ -264,7 +264,7 @@ class TestSonosPlayerLogicModule(unittest.TestCase):
             "artist": "Bar",
         })
         # String outputs must be bytes per the SDK's iso-8859-15 rule.
-        self.assertEqual(fw.outputs["State"], b"PLAYING")
+        self.assertEqual(fw.outputs["State"], b"Playing")
         self.assertEqual(fw.outputs["Title"], b"Foo")
         self.assertEqual(fw.outputs["Artist"], b"Bar")
         # Numeric outputs are int/float.
@@ -290,7 +290,7 @@ class TestSonosPlayerLogicModule(unittest.TestCase):
         fw = StubFramework()
         lm = self.mod.LogicModule(fw)
         lm._mark_state("STOPPED")
-        self.assertEqual(fw.outputs["State"], b"STOPPED")
+        self.assertEqual(fw.outputs["State"], b"Stopped")
 
     def test_mark_volume_writes_float(self):
         fw = StubFramework()
@@ -941,20 +941,47 @@ class TestPlayerStationFromAdmin(unittest.TestCase):
     def test_lookup_station_via_admin_returns_none_when_empty(self):
         self.assertIsNone(self.player._lookup_station_via_admin(1))
 
-    def test_normalize_state_strips_zpstr_prefix(self):
-        """Sonos's internal ZPSTR_* states surface as friendly names."""
+    def test_normalize_state_returns_title_case_friendly(self):
+        """All transport states surface as Title-cased English. ZPSTR_
+        prefix is stripped; known codes map to nicer short forms
+        (PAUSED_PLAYBACK -> Paused, not 'Paused playback'); unknown
+        codes fall back to 'Sentence case' so future Sonos states
+        still look readable instead of ALL_CAPS."""
         n = self.player._normalize_state
-        self.assertEqual(n("ZPSTR_BUFFERING"), "BUFFERING")
-        self.assertEqual(n("ZPSTR_CONNECTING"), "CONNECTING")
-        self.assertEqual(n("ZPSTR_PLAYING_TV"), "PLAYING_TV")
-        # Standard UPnP states pass through unchanged so existing
-        # integrator wiring keeps working.
-        self.assertEqual(n("PLAYING"), "PLAYING")
-        self.assertEqual(n("PAUSED_PLAYBACK"), "PAUSED_PLAYBACK")
-        self.assertEqual(n("STOPPED"), "STOPPED")
-        self.assertEqual(n("TRANSITIONING"), "TRANSITIONING")
+        self.assertEqual(n("PLAYING"), "Playing")
+        self.assertEqual(n("PAUSED_PLAYBACK"), "Paused")
+        self.assertEqual(n("STOPPED"), "Stopped")
+        self.assertEqual(n("TRANSITIONING"), "Transitioning")
+        self.assertEqual(n("NO_MEDIA_PRESENT"), "No media")
+        self.assertEqual(n("ZPSTR_BUFFERING"), "Buffering")
+        self.assertEqual(n("ZPSTR_CONNECTING"), "Connecting")
+        self.assertEqual(n("ZPSTR_PLAYING_TV"), "Playing TV")
+        # Unknown future state — generic sentence case.
+        self.assertEqual(n("SOME_NEW_THING"), "Some new thing")
         self.assertEqual(n(""), "")
         self.assertEqual(n(None), "")
+
+    def test_friendly_title_passes_real_titles_through_unchanged(self):
+        """Real track titles preserve their original casing — we don't
+        want to title-case "Hey Jude" into "Hey jude" or any such
+        thing. Only ZPSTR_ leaks get the cleanup treatment."""
+        f = self.player._friendly_title
+        # Real titles untouched.
+        self.assertEqual(f("Hey Jude"), "Hey Jude")
+        self.assertEqual(f("BBC Radio 1"), "BBC Radio 1")
+        self.assertEqual(f("Live at Madison Square Garden"),
+                         "Live at Madison Square Garden")
+        self.assertEqual(f("lowercase song title"),
+                         "lowercase song title")
+        # ZPSTR_ leaks get the same friendly treatment as State.
+        self.assertEqual(f("ZPSTR_BUFFERING"), "Buffering")
+        self.assertEqual(f("ZPSTR_CONNECTING"), "Connecting")
+        # Plain "PLAYING" appearing in dc:title also gets cleaned (it
+        # would only happen if Sonos leaked a state into the title,
+        # but cheap to handle).
+        self.assertEqual(f("PLAYING"), "Playing")
+        self.assertEqual(f(""), "")
+        self.assertEqual(f(None), "")
 
     def test_is_container_uri_recognises_playlist_schemes(self):
         """The dispatch from _action_start_radio uses _is_container_uri

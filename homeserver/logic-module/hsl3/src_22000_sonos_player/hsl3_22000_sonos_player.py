@@ -155,17 +155,50 @@ def _is_container_uri(uri):
 
 
 # Sonos extends the standard UPnP transport-state alphabet with a
-# ZPSTR_-prefixed family (BUFFERING, CONNECTING, PLAYING_TV, …). The
-# prefix is internal terminology; we strip it so the State output shows
-# user-friendly values. Standard states (PLAYING, PAUSED_PLAYBACK,
-# STOPPED, TRANSITIONING, NO_MEDIA_PRESENT) pass through unchanged so
-# any existing integrator wiring keeps working.
+# ZPSTR_-prefixed family (BUFFERING, CONNECTING, PLAYING_TV, …). We
+# strip the prefix AND title-case the whole value so the State output
+# reads as "Playing" / "Paused" / "Buffering" rather than the raw
+# ALL_CAPS shouting. A small explicit map covers the most common
+# states so they get nicer forms (PAUSED_PLAYBACK -> "Paused" rather
+# than "Paused playback", NO_MEDIA_PRESENT -> "No media", etc.); any
+# unknown value falls back to "<First-letter-capital> <rest lower>".
+_STATE_FRIENDLY = {
+    "PLAYING":          "Playing",
+    "PAUSED_PLAYBACK":  "Paused",
+    "STOPPED":          "Stopped",
+    "TRANSITIONING":    "Transitioning",
+    "NO_MEDIA_PRESENT": "No media",
+    "BUFFERING":        "Buffering",
+    "CONNECTING":       "Connecting",
+    "PLAYING_TV":       "Playing TV",
+    "PLAYING_LINE_IN":  "Playing line-in",
+}
+
+
 def _normalize_state(raw):
     if not raw:
         return ""
     s = str(raw).strip()
     if s.startswith("ZPSTR_"):
-        return s[len("ZPSTR_"):]
+        s = s[len("ZPSTR_"):]
+    if s in _STATE_FRIENDLY:
+        return _STATE_FRIENDLY[s]
+    # Generic ALL_CAPS_WITH_UNDERSCORES -> "Title cased sentence" so
+    # any future Sonos state we don't know about still looks friendly.
+    return s.replace("_", " ").lower().capitalize()
+
+
+def _friendly_title(raw):
+    """Most track titles are real metadata ("Yesterday", "Hey Jude") and
+    we want them through unchanged. But occasionally Sonos leaks a
+    transport-state marker (ZPSTR_BUFFERING) into the <dc:title> field
+    while a stream is connecting. Translate those the same way the
+    State output is translated so the Title output stays readable."""
+    if not raw:
+        return ""
+    s = str(raw).strip()
+    if s.startswith("ZPSTR_") or s in _STATE_FRIENDLY:
+        return _normalize_state(s)
     return s
 
 
@@ -668,9 +701,9 @@ class LogicModule:
         if "mute" in parsed:
             self._last_mute = parsed["mute"]
         if "title" in parsed and parsed["title"]:
-            self._last_title = parsed["title"]
+            self._last_title = _friendly_title(parsed["title"])
         if "streamContent" in parsed and parsed["streamContent"]:
-            self._last_title = parsed["streamContent"]
+            self._last_title = _friendly_title(parsed["streamContent"])
         if "artist" in parsed and parsed["artist"]:
             self._last_artist = parsed["artist"]
         self._publish_outputs()
@@ -1198,7 +1231,7 @@ class LogicModule:
         if mute is not None:
             self._last_mute = mute
         if title:
-            self._last_title = title
+            self._last_title = _friendly_title(title)
         if artist:
             self._last_artist = artist
         self._publish_outputs()
