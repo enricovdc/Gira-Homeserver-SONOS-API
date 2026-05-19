@@ -9,7 +9,7 @@ Two LBS modules:
 
 | LBS | Name | Role |
 | --- | --- | --- |
-| **22000** | Sonos Player | One instance per Sonos player. Play / pause / stop / next / prev, volume, mute, shuffle, repeat, status outputs (including discrete Is\* booleans, Album, AlbumArtURI, group info), UPnP event push, preset playback through the Admin library. |
+| **22000** | Sonos Player | One instance per Sonos player. Play / pause / stop / next / prev, volume, mute, shuffle, repeat, status outputs (discrete Is\* booleans, per-action \*Allowed flags so a Gira tile can grey out buttons the player would reject, Album, AlbumArtURI, group info), UPnP event push, preset playback through the Admin library. |
 | **22001** | Sonos Admin | Singleton companion. Web UI at `http://<hs-ip>:8080/` for managing players (by **UUID / MAC / IP / name**), a global preset library (radio / playlists / line-in / Bluetooth), group presets, project-wide Player Defaults, and Sonos Cloud OAuth. Runs periodic + KNX-triggerable SSDP discovery with a structured `DiscoveredPlayers` output. All inside HSL3, no external process. Optional but recommended. |
 
 Compatible with Sonos firmware **2024+ and 2026** and Gira HomeServer
@@ -44,17 +44,18 @@ firmware **4.13+** (HSL3 / Python 3.9 logic-module SDK).
   trigger `GroupPreset` on any Player block to form the group.
   `Ungroup` breaks the player out again.
 - **KNX-friendly outputs.** ZoneName, Online, State, IsPlaying /
-  IsPaused / IsStopped / IsTransitioning, Volume, Mute, Title, Artist,
-  Album, AlbumArtURI, ShuffleState, RepeatState, GroupInfo,
-  IsCoordinator, ActiveStation, LastError, Subscribed — wire to group
-  addresses with the recommended DPTs in
-  [docs/KNX-MAPPING.md](docs/KNX-MAPPING.md).
+  IsPaused / IsStopped / IsTransitioning, PlayAllowed / PauseAllowed /
+  StopAllowed / NextAllowed / PrevAllowed / ShuffleAllowed /
+  RepeatAllowed, Volume, Mute, Title, Artist, Album, AlbumArtURI,
+  ShuffleState, RepeatState, GroupInfo, IsCoordinator, ActiveStation,
+  LastError, Subscribed — wire to group addresses with the recommended
+  DPTs in [docs/KNX-MAPPING.md](docs/KNX-MAPPING.md).
 - **Persistence.** Admin's registries (players, presets, group
   presets, cloud credentials, player defaults) survive HomeServer
   restarts via HSL3 retentive stores.
 - **Graceful degradation.** If a listener can't bind, modules fall
   back to timer-based status polling and keep working.
-- **78 unit tests** with a stubbed `Hsl3Framework`, runnable in CI.
+- **82 unit tests** with a stubbed `Hsl3Framework`, runnable in CI.
 
 ## Repository layout
 
@@ -123,8 +124,9 @@ on a machine that has the SDK.
 python3 tests/test_logic_modules.py
 ```
 
-78 tests covering: pure helpers (SOAP fault extraction, NOTIFY parsing,
-URI normalisation, play-mode composition, iso-8859-15 encoding), the
+82 tests covering: pure helpers (SOAP fault extraction, NOTIFY parsing,
+URI normalisation, play-mode composition, transport-actions parsing,
+iso-8859-15 encoding), the
 `LogicModule` IO contract (string outputs are bytes, numeric outputs
 are float/int), Admin registry CRUD + persistence round-trip, group
 preset dispatch, container playback (queue-and-play), and the

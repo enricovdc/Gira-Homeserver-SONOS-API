@@ -116,6 +116,17 @@ ENV_GET_TRANSPORT_SETTINGS = (
     '<s:Body><u:GetTransportSettings xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
     "<InstanceID>0</InstanceID></u:GetTransportSettings></s:Body></s:Envelope>"
 )
+# CurrentTransportActions is Sonos's "what transport buttons are currently
+# available". Comma-separated list — typically "Play, Stop" for a radio
+# stream, "Play, Stop, Pause, Seek, Next, Previous" for queue playback.
+# Drives the *Allowed outputs so a Gira visualisation can grey out
+# buttons that the player would reject right now.
+ENV_GET_CURRENT_TRANSPORT_ACTIONS = (
+    '<?xml version="1.0" encoding="utf-8"?>'
+    '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">'
+    '<s:Body><u:GetCurrentTransportActions xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
+    "<InstanceID>0</InstanceID></u:GetCurrentTransportActions></s:Body></s:Envelope>"
+)
 
 # BecomeCoordinatorOfStandaloneGroup — ungroups the player from whatever
 # zone group it's currently in, making it a standalone coordinator.
@@ -245,6 +256,42 @@ def flags_to_play_mode(shuffle, repeat):
     if repeat:
         return "REPEAT_ALL"
     return "NORMAL"
+
+
+def parse_transport_actions(raw):
+    """Sonos exposes a comma-separated "what transport actions are
+    currently allowed" list — like "Play, Stop, Pause, Seek, Next,
+    Previous" for queue playback, or just "Play, Stop" for a radio
+    stream. Returns a dict with the booleans we surface as the *Allowed
+    outputs.
+
+    Shuffle/Repeat are not in the upstream list because they are
+    settings rather than transport actions. We approximate "allowed"
+    for them as "queue playback is in effect" — i.e. Next is allowed.
+    That matches the user expectation: you can't shuffle a radio
+    stream, but any queued source is shufflable / repeatable."""
+    if raw is None:
+        return {
+            "play": False, "pause": False, "stop": False,
+            "next": False, "prev": False,
+            "shuffle": False, "repeat": False,
+        }
+    tokens = {t.strip().lower() for t in str(raw).split(",") if t.strip()}
+    next_allowed = "next" in tokens
+    return {
+        "play":    "play"     in tokens,
+        "pause":   "pause"    in tokens,
+        "stop":    "stop"     in tokens,
+        "next":    next_allowed,
+        "prev":    "previous" in tokens,
+        # Shuffle / Repeat make sense only when there's a queue to
+        # navigate. Use Next-allowed as the proxy.
+        "shuffle": next_allowed,
+        "repeat":  next_allowed,
+    }
+
+
+_DEFAULT_ALLOWED = parse_transport_actions(None)
 
 
 def extract_group_master_uuid(track_uri):
@@ -428,6 +475,9 @@ def parse_notify(body):
     pm = re.search(r'<CurrentPlayMode\s+val="([^"]+)"', inner)
     if pm:
         out["playMode"] = pm.group(1)
+    ta = re.search(r'<CurrentTransportActions\s+val="([^"]*)"', inner)
+    if ta:
+        out["transportActions"] = unescape_xml(ta.group(1))
     v = re.search(r'<Volume\s+channel="Master"\s+val="(\d+)"', inner)
     if v:
         out["volume"] = int(v.group(1))
@@ -642,6 +692,10 @@ class LogicModule:
         self._last_shuffle = False
         self._last_repeat = False
         self._last_group_master = ""  # raw RINCON_xxx master UUID; "" when coordinator
+        # Transport-actions snapshot drives the *Allowed outputs (PlayAllowed,
+        # PauseAllowed, …). Starts all-false so a not-yet-polled player shows
+        # every button as unavailable rather than incorrectly allowing them.
+        self._last_allowed = dict(_DEFAULT_ALLOWED)
         self._uuid = ""           # Sonos RINCON UUID — needed to build queue URI
         self._active_station = 0
         self._online = False
@@ -825,6 +879,8 @@ class LogicModule:
             self._last_album_art = self._absolute_album_art(parsed["albumArtURI"])
         if "trackUri" in parsed:
             self._last_group_master = extract_group_master_uuid(parsed["trackUri"])
+        if "transportActions" in parsed:
+            self._last_allowed = parse_transport_actions(parsed["transportActions"])
         self._publish_outputs()
 
     # ----- Config / input reading ------------------------------------------
@@ -999,6 +1055,18 @@ class LogicModule:
         if not ok:
             return None
         return extract_response_field(body, "PlayMode")
+
+    def _get_transport_actions_blocking(self):
+        """Read CurrentTransportActions. Returns the raw comma-separated
+        string ("Play, Stop, Pause, Seek, Next, Previous") or None on
+        failure."""
+        ok, body, _err = self._soap(
+            "AVTransport", "GetCurrentTransportActions",
+            ENV_GET_CURRENT_TRANSPORT_ACTIONS,
+        )
+        if not ok:
+            return None
+        return extract_response_field(body, "Actions")
 
     def _play_via_queue(self, uri, metadata, spec):
         """Queue-and-play path for container URIs (playlist / album /
@@ -1247,6 +1315,7 @@ class LogicModule:
             mute_ok, mute_body, _err = self._soap("RenderingControl", "GetMute", ENV_GET_MUTE)
             mute = (extract_response_field(mute_body, "CurrentMute") == "1") if mute_ok else None
             play_mode = self._get_play_mode_blocking()
+            actions = self._get_transport_actions_blocking()
             pos_ok, pos_body, _err = self._soap("AVTransport", "GetPositionInfo", ENV_GET_POSITION)
             title = artist = album = album_art = track_uri = ""
             if pos_ok:
@@ -1271,12 +1340,13 @@ class LogicModule:
                     title = unescape_xml(sc.group(1)) or title
             self.fw.run_in_context(
                 self._apply_status_poll,
-                (True, state, vol, mute, title, artist, album, album_art, play_mode, track_uri),
+                (True, state, vol, mute, title, artist, album, album_art,
+                 play_mode, track_uri, actions),
             )
         else:
             self.fw.run_in_context(
                 self._apply_status_poll,
-                (False, None, None, None, "", "", "", "", None, ""),
+                (False, None, None, None, "", "", "", "", None, "", None),
             )
 
         self._maintain_subscriptions()
@@ -1378,6 +1448,7 @@ class LogicModule:
         # Discrete state booleans — exactly one is 1 at any time when
         # we have a known state (all 0 when state hasn't been read yet).
         self._publish_state_flags()
+        self._publish_allowed_flags()
         if self._last_volume >= 0:
             self.fw.set_output("Volume", float(self._last_volume))
         if self._last_mute is not None:
@@ -1400,6 +1471,16 @@ class LogicModule:
         self.fw.set_output("IsStopped", 1 if s == "Stopped" else 0)
         self.fw.set_output("IsTransitioning", 1 if s == "Transitioning" else 0)
 
+    def _publish_allowed_flags(self):
+        a = self._last_allowed
+        self.fw.set_output("PlayAllowed",    1 if a["play"]    else 0)
+        self.fw.set_output("PauseAllowed",   1 if a["pause"]   else 0)
+        self.fw.set_output("StopAllowed",    1 if a["stop"]    else 0)
+        self.fw.set_output("NextAllowed",    1 if a["next"]    else 0)
+        self.fw.set_output("PrevAllowed",    1 if a["prev"]    else 0)
+        self.fw.set_output("ShuffleAllowed", 1 if a["shuffle"] else 0)
+        self.fw.set_output("RepeatAllowed",  1 if a["repeat"]  else 0)
+
     def _publish_zone_name(self):
         self.fw.set_output("ZoneName", to_iso_bytes(self._last_zone_name))
 
@@ -1413,7 +1494,8 @@ class LogicModule:
             self.debug.set("Subscription rc exp", float(max(0, self._sub_rc_exp - now)))
 
     def _apply_status_poll(self, online, state, volume, mute, title, artist,
-                           album="", album_art="", play_mode=None, track_uri=""):
+                           album="", album_art="", play_mode=None, track_uri="",
+                           actions=None):
         if self.debug is not None:
             self.debug.inc("Status polls")
             self.debug.timestamp("Last poll")
@@ -1438,6 +1520,13 @@ class LogicModule:
             # Refresh group membership only when we actually had a poll;
             # offline players keep their last known state.
             self._last_group_master = extract_group_master_uuid(track_uri)
+        if actions is not None:
+            self._last_allowed = parse_transport_actions(actions)
+        elif not online:
+            # Lost contact — every transport action becomes unavailable
+            # so the visualisation greys out instead of inviting clicks
+            # that would just write to LastError.
+            self._last_allowed = dict(_DEFAULT_ALLOWED)
         self._publish_outputs()
         self._publish_sub_state()
 

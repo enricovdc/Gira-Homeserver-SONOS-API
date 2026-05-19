@@ -2,7 +2,7 @@
 
 Every user-facing function the integration exposes, and where it lives
 in the HSL3 modules. Refreshed against the v1.0.0 module shipped in
-this repo: **LBS 22000 Sonos Player** with 24 inputs / 20 outputs and
+this repo: **LBS 22000 Sonos Player** with 24 inputs / 27 outputs and
 **LBS 22001 Sonos Admin** with 7 inputs / 8 outputs + 5 retentive
 stores.
 
@@ -40,19 +40,26 @@ stores.
 | Is paused | `IsPaused` (A5) | |
 | Is stopped | `IsStopped` (A6) | |
 | Is transitioning | `IsTransitioning` (A7) | Brief; Sonos passes through this when starting / changing tracks |
-| Current volume | `Volume` (A8) | 0–100 |
-| Current mute | `Mute` (A9) | 0/1 |
-| Current track title | `Title` (A10) | Falls back to `streamContent` for radio; `ZPSTR_` leaks normalised |
-| Current artist | `Artist` (A11) | |
-| Current album | `Album` (A12) | Empty for radio streams |
-| Album-art URL | `AlbumArtURI` (A13) | Relative `/getaa?...` paths converted to absolute `http://<player-ip>:1400/getaa?...` so a Gira visualisation tile can use them directly |
-| Shuffle state | `ShuffleState` (A14) | 1 when the player is in any SHUFFLE mode; reflects changes made from the Sonos app |
-| Repeat state | `RepeatState` (A15) | 1 when REPEAT_ALL or REPEAT_ONE |
-| Group master | `GroupInfo` (A16) | Empty when coordinator / standalone; master's Zone Name (resolved via Admin) or RINCON UUID when a slave |
-| Is coordinator | `IsCoordinator` (A17) | 1 when this player is the group coordinator or standalone, 0 when slave. Derived from `CurrentTrackURI` starting with `x-rincon:` |
-| Active preset index | `ActiveStation` (A18) | 0 = none. Index of the last preset started by `StartRadio`/`StartRadioName` |
-| Last error code | `LastError` (A19) | UPnP code, `UNREACHABLE`, `HTTP_<n>`, `PRESET_NOT_FOUND`, `GROUP_NOT_FOUND`, `GROUP_PARTIAL`, `SET_PLAY_MODE_FAILED`, `EXCEPTION: …` |
-| UPnP subscription health | `Subscribed` (A20) | 1 = both AVTransport + RenderingControl subscriptions alive |
+| Play allowed right now | `PlayAllowed` (A8) | 1 when the player will accept a Play. From Sonos's `CurrentTransportActions`. 0 when offline. |
+| Pause allowed | `PauseAllowed` (A9) | Typically 0 for live radio streams (cannot be paused) |
+| Stop allowed | `StopAllowed` (A10) | |
+| Next allowed | `NextAllowed` (A11) | Typically 1 for queue / playlist, 0 for radio |
+| Previous allowed | `PrevAllowed` (A12) | |
+| Shuffle allowed | `ShuffleAllowed` (A13) | Heuristic: same as `NextAllowed` — there must be a queue to navigate |
+| Repeat-all allowed | `RepeatAllowed` (A14) | Same heuristic as `ShuffleAllowed` |
+| Current volume | `Volume` (A15) | 0–100 |
+| Current mute | `Mute` (A16) | 0/1 |
+| Current track title | `Title` (A17) | Falls back to `streamContent` for radio; `ZPSTR_` leaks normalised |
+| Current artist | `Artist` (A18) | |
+| Current album | `Album` (A19) | Empty for radio streams |
+| Album-art URL | `AlbumArtURI` (A20) | Relative `/getaa?...` paths converted to absolute `http://<player-ip>:1400/getaa?...` so a Gira visualisation tile can use them directly |
+| Shuffle state | `ShuffleState` (A21) | 1 when the player is in any SHUFFLE mode; reflects changes made from the Sonos app |
+| Repeat state | `RepeatState` (A22) | 1 when REPEAT_ALL or REPEAT_ONE |
+| Group master | `GroupInfo` (A23) | Empty when coordinator / standalone; master's Zone Name (resolved via Admin) or RINCON UUID when a slave |
+| Is coordinator | `IsCoordinator` (A24) | 1 when this player is the group coordinator or standalone, 0 when slave. Derived from `CurrentTrackURI` starting with `x-rincon:` |
+| Active preset index | `ActiveStation` (A25) | 0 = none. Index of the last preset started by `StartRadio`/`StartRadioName` |
+| Last error code | `LastError` (A26) | UPnP code, `UNREACHABLE`, `HTTP_<n>`, `PRESET_NOT_FOUND`, `GROUP_NOT_FOUND`, `GROUP_PARTIAL`, `SET_PLAY_MODE_FAILED`, `EXCEPTION: …` |
+| UPnP subscription health | `Subscribed` (A27) | 1 = both AVTransport + RenderingControl subscriptions alive |
 
 ## Player configuration (LBS 22000 tunable inputs)
 

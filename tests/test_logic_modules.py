@@ -256,6 +256,38 @@ class TestSonosPlayerHelpers(unittest.TestCase):
         self.assertEqual(f(True,  False), "SHUFFLE_NOREPEAT")
         self.assertEqual(f(True,  True),  "SHUFFLE")
 
+    def test_parse_transport_actions(self):
+        p = self.mod.parse_transport_actions
+        # Queue playback — everything allowed
+        full = p("Play, Stop, Pause, Seek, Next, Previous")
+        self.assertTrue(full["play"]); self.assertTrue(full["pause"])
+        self.assertTrue(full["stop"]); self.assertTrue(full["next"])
+        self.assertTrue(full["prev"])
+        # Shuffle / Repeat track Next-allowed (heuristic for "queue playback")
+        self.assertTrue(full["shuffle"]); self.assertTrue(full["repeat"])
+        # Radio stream — only Play, Stop available; no queue navigation
+        radio = p("Play, Stop")
+        self.assertTrue(radio["play"]); self.assertTrue(radio["stop"])
+        self.assertFalse(radio["pause"])
+        self.assertFalse(radio["next"]); self.assertFalse(radio["prev"])
+        self.assertFalse(radio["shuffle"]); self.assertFalse(radio["repeat"])
+        # Case insensitive, whitespace-tolerant
+        weird = p("PLAY,stop , next")
+        self.assertTrue(weird["play"]); self.assertTrue(weird["stop"])
+        self.assertTrue(weird["next"]); self.assertTrue(weird["shuffle"])
+        # None / empty → everything denied
+        denied = p(None)
+        self.assertEqual(set(denied.values()), {False})
+        denied2 = p("")
+        self.assertEqual(set(denied2.values()), {False})
+
+    def test_parse_notify_extracts_transport_actions(self):
+        sample = """<e:propertyset><e:property><LastChange>&lt;Event&gt;&lt;InstanceID val=&quot;0&quot;&gt;
+&lt;CurrentTransportActions val=&quot;Play, Stop, Pause, Seek, Next, Previous&quot;/&gt;
+&lt;/InstanceID&gt;&lt;/Event&gt;</LastChange></e:property></e:propertyset>"""
+        r = self.mod.parse_notify(sample)
+        self.assertEqual(r["transportActions"], "Play, Stop, Pause, Seek, Next, Previous")
+
     def test_extract_group_master_uuid(self):
         g = self.mod.extract_group_master_uuid
         self.assertEqual(g("x-rincon:RINCON_AABBCC"), "RINCON_AABBCC")
@@ -391,6 +423,62 @@ class TestSonosPlayerLogicModule(unittest.TestCase):
         self.assertIn("<NewPlayMode>REPEAT_ALL</NewPlayMode>", calls[-1][1])
         lm._action_set_play_mode(False, False)
         self.assertIn("<NewPlayMode>NORMAL</NewPlayMode>", calls[-1][1])
+
+    def test_apply_notify_publishes_allowed_flags(self):
+        """CurrentTransportActions in the NOTIFY drives the *Allowed
+        outputs. Queue playback string allows everything; a radio
+        stream's short list denies pause / next / prev / shuffle /
+        repeat."""
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._host = "10.0.0.5"
+        lm._apply_notify_parsed({
+            "state": "PLAYING",
+            "transportActions": "Play, Stop, Pause, Seek, Next, Previous",
+        })
+        self.assertEqual(fw.outputs["PlayAllowed"], 1)
+        self.assertEqual(fw.outputs["PauseAllowed"], 1)
+        self.assertEqual(fw.outputs["StopAllowed"], 1)
+        self.assertEqual(fw.outputs["NextAllowed"], 1)
+        self.assertEqual(fw.outputs["PrevAllowed"], 1)
+        self.assertEqual(fw.outputs["ShuffleAllowed"], 1)
+        self.assertEqual(fw.outputs["RepeatAllowed"], 1)
+
+        # Radio stream: only play + stop available; queue navigation
+        # and shuffle / repeat must all be unavailable.
+        lm._apply_notify_parsed({
+            "state": "PLAYING",
+            "transportActions": "Play, Stop",
+        })
+        self.assertEqual(fw.outputs["PlayAllowed"], 1)
+        self.assertEqual(fw.outputs["StopAllowed"], 1)
+        self.assertEqual(fw.outputs["PauseAllowed"], 0)
+        self.assertEqual(fw.outputs["NextAllowed"], 0)
+        self.assertEqual(fw.outputs["PrevAllowed"], 0)
+        self.assertEqual(fw.outputs["ShuffleAllowed"], 0)
+        self.assertEqual(fw.outputs["RepeatAllowed"], 0)
+
+    def test_status_poll_offline_clears_allowed_flags(self):
+        """Lost contact must zero every *Allowed output so the
+        visualisation doesn't keep inviting clicks the player would
+        reject."""
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._host = "10.0.0.5"
+        # Seed with queue playback so the *Allowed bits start at 1.
+        lm._apply_notify_parsed({
+            "state": "PLAYING",
+            "transportActions": "Play, Stop, Pause, Seek, Next, Previous",
+        })
+        self.assertEqual(fw.outputs["PlayAllowed"], 1)
+        # Now go offline.
+        lm._apply_status_poll(False, None, None, None, "", "")
+        for k in ("PlayAllowed", "PauseAllowed", "StopAllowed",
+                  "NextAllowed", "PrevAllowed",
+                  "ShuffleAllowed", "RepeatAllowed"):
+            self.assertEqual(fw.outputs[k], 0, k)
 
     def test_apply_notify_publishes_album_and_group_info(self):
         fw = StubFramework()
