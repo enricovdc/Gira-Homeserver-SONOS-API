@@ -52,16 +52,19 @@ firmware **4.13+** (HSL3 / Python 3.9 logic-module SDK).
 
 ## Quick start
 
-1. **Build the HSLZ archives** (requires a Python 3.9 with the Gira
-   HSL3 generator; falls back to a help-only archive if the generator
-   isn't on PATH — see [hsl3/README.md](homeserver/logic-module/hsl3/README.md)):
+1. **Grab the pre-built HSLZ archives** from the repo:
+
+   - [`homeserver/logic-module/hsl3/build/dist/22000_sonos_player.hslz`](homeserver/logic-module/hsl3/build/dist/22000_sonos_player.hslz)
+   - [`homeserver/logic-module/hsl3/build/dist/22001_sonos_admin.hslz`](homeserver/logic-module/hsl3/build/dist/22001_sonos_admin.hslz)
+
+   Each archive contains the Python source, `config.json`, EN+DE help
+   pages, the SDK stylesheet, and a `README-INSIDE.txt` with the
+   one-liner to finalise into a deployable `.hsl` on a machine that
+   has the Gira HSL3 generator. To rebuild from source:
 
    ```sh
    python3 homeserver/logic-module/hsl3/build/build_hslz.py
    ```
-
-   Output: `homeserver/logic-module/hsl3/build/dist/22000_sonos_player.hslz`
-   and `22001_sonos_admin.hslz`.
 
 2. **Import in Experte.** *Logikbausteine → Importieren* → pick the
    two `.hslz` files. The blocks appear under **Multimedia → Sonos**.
