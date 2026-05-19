@@ -165,8 +165,6 @@ def make_player_inputs(host="10.0.0.1", **overrides):
         "HttpTimeout":  StubSlot(5),
         "CallbackBase": StubSlot(""),
     }
-    for i in range(1, 9):
-        base["Station{}Uri".format(i)] = StubSlot("")
     base.update({k: (v if isinstance(v, StubSlot) else StubSlot(v))
                  for k, v in overrides.items()})
     return StubSlots(base)

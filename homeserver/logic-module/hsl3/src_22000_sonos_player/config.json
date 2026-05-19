@@ -28,15 +28,7 @@
       { "type": "number", "identifier": "PollInterval",  "init_value": 60,  "label": "Status Poll Interval seconds" },
       { "type": "number", "identifier": "SubTimeout",    "init_value": 1800,"label": "UPnP Subscription Timeout seconds" },
       { "type": "number", "identifier": "HttpTimeout",   "init_value": 5,   "label": "HTTP Timeout seconds" },
-      { "type": "string", "identifier": "CallbackBase",  "init_value": "",  "label": "Callback Base URL leave empty for auto" },
-      { "type": "string", "identifier": "Station1Uri",   "init_value": "",  "label": "Preset 1 Stream URI" },
-      { "type": "string", "identifier": "Station2Uri",   "init_value": "",  "label": "Preset 2 Stream URI" },
-      { "type": "string", "identifier": "Station3Uri",   "init_value": "",  "label": "Preset 3 Stream URI" },
-      { "type": "string", "identifier": "Station4Uri",   "init_value": "",  "label": "Preset 4 Stream URI" },
-      { "type": "string", "identifier": "Station5Uri",   "init_value": "",  "label": "Preset 5 Stream URI" },
-      { "type": "string", "identifier": "Station6Uri",   "init_value": "",  "label": "Preset 6 Stream URI" },
-      { "type": "string", "identifier": "Station7Uri",   "init_value": "",  "label": "Preset 7 Stream URI" },
-      { "type": "string", "identifier": "Station8Uri",   "init_value": "",  "label": "Preset 8 Stream URI" }
+      { "type": "string", "identifier": "CallbackBase",  "init_value": "",  "label": "Callback Base URL leave empty for auto" }
     ],
     "outputs": [
       { "type": "string", "identifier": "ZoneName",      "init_value": "", "label": "Sonos Zone Name" },
@@ -84,15 +76,7 @@
           { "label": "Status-Abfrageintervall Sekunden" },
           { "label": "UPnP Abonnement Timeout Sekunden" },
           { "label": "HTTP-Timeout Sekunden" },
-          { "label": "Callback-Basis-URL leer fuer Auto" },
-          { "label": "Preset 1 Stream-URI" },
-          { "label": "Preset 2 Stream-URI" },
-          { "label": "Preset 3 Stream-URI" },
-          { "label": "Preset 4 Stream-URI" },
-          { "label": "Preset 5 Stream-URI" },
-          { "label": "Preset 6 Stream-URI" },
-          { "label": "Preset 7 Stream-URI" },
-          { "label": "Preset 8 Stream-URI" }
+          { "label": "Callback-Basis-URL leer fuer Auto" }
         ],
         "translation_outputs": [
           { "label": "Sonos Zonen-Name" },

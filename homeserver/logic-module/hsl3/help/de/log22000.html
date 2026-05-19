@@ -29,7 +29,7 @@
 <div class="topic">
   <h2 class="t-line"><a id="auto_index_anchor_1_"></a><span class="t-chapter">1.</span><span class="t-text">Beschreibung</span></h2>
   <div class="descr">
-    Steuert einen einzelnen Sonos Player ueber das lokale Netzwerk mittels der UPnP und SOAP API auf Port 1400. Bietet Wiedergabesteuerung (Play, Pause, Stop, Naechster, Vorheriger), Lautstaerke und Stummschaltung, acht konfigurierbare Presets, Statusausgaenge (Zustand, Lautstaerke, Stumm, Titel, Interpret, aktiver Preset) und Live UPnP Event Push so dass Statusausgaben ohne Polling aktualisiert werden.
+    Steuert einen einzelnen Sonos Player ueber das lokale Netzwerk mittels der UPnP und SOAP API auf Port 1400. Bietet Wiedergabesteuerung (Play, Pause, Stop, Naechster, Vorheriger), Lautstaerke und Stummschaltung, Sonos Admin Preset-Bibliothek, Statusausgaenge (Zustand, Lautstaerke, Stumm, Titel, Interpret, aktiver Preset) und Live UPnP Event Push so dass Statusausgaben ohne Polling aktualisiert werden.
   </div>
   <div class="descr">
     Kompatibel mit aktueller und 2026er Sonos Firmware. Der Preset-Start verwendet leere DIDL-Lite Metadaten und das x-rincon-mp3radio Direkt-Broadcast-Schema mit automatischem Fallback bei Ablehnung.
@@ -74,7 +74,6 @@
     <tr><td class="io-nr input center">E20</td><td class="io-name">SubTimeout</td><td class="io-init center">1800</td><td class="io-descr">UPnP Abonnement Timeout.</td></tr>
     <tr><td class="io-nr input center">E21</td><td class="io-name">HttpTimeout</td><td class="io-init center">5</td><td class="io-descr">HTTP Anfrage Timeout in Sekunden.</td></tr>
     <tr><td class="io-nr input center">E22</td><td class="io-name">CallbackBase</td><td class="io-init string center"></td><td class="io-descr">Callback Basis URL. Leer fuer automatische Erkennung.</td></tr>
-    <tr><td class="io-nr input center">E23..E30</td><td class="io-name">Preset1Uri..Preset8Uri</td><td class="io-init string center"></td><td class="io-descr">Stream URIs fuer Preset-Plaetze 1 bis 8.</td></tr>
   </table>
 </div>
 

@@ -32,7 +32,7 @@
     <span class="t-chapter">1.</span><span class="t-text">Description</span>
   </h2>
   <div class="descr">
-    Controls one Sonos player over the local network using the players UPnP and SOAP API on port 1400. Provides playback control (play, pause, stop, next, previous), volume and mute, eight configurable presets, status outputs (state, volume, mute, title, artist, active station), and live UPnP event push so status outputs update without polling.
+    Controls one Sonos player over the local network using the players UPnP and SOAP API on port 1400. Provides playback control (play, pause, stop, next, previous), volume and mute, Sonos Admin preset library, status outputs (state, volume, mute, title, artist, active station), and live UPnP event push so status outputs update without polling.
   </div>
   <div class="descr">
     Compatible with current and 2026 Sonos firmware. Direct-stream presets use empty DIDL-Lite metadata and the x-rincon-mp3radio direct-broadcast scheme, with an automatic fallback if the player rejects the first attempt.
@@ -69,7 +69,7 @@
     <tr><td class="io-nr input center">E9</td><td class="io-name">VolDown</td><td class="io-init center">0</td><td class="io-descr">Rising edge decreases volume by VolStep.</td></tr>
     <tr><td class="io-nr input center">E10</td><td class="io-name">SetMute</td><td class="io-init center">0</td><td class="io-descr">0 unmutes, non-zero mutes.</td></tr>
     <tr><td class="io-nr input center">E11</td><td class="io-name">MuteToggle</td><td class="io-init center">0</td><td class="io-descr">Rising edge toggles mute.</td></tr>
-    <tr><td class="io-nr input center">E12</td><td class="io-name">StartRadio</td><td class="io-init center">0</td><td class="io-descr">Alphabetical index 1..N of a preset from the Sonos Admin library (or 1..8 of the per-player PresetNUri inputs when Admin is absent). The # column in the Admin&apos;s Presets table shows each preset&apos;s current index.</td></tr>
+    <tr><td class="io-nr input center">E12</td><td class="io-name">StartRadio</td><td class="io-init center">0</td><td class="io-descr">Alphabetical index 1..N of a preset from the Sonos Admin library (Sonos Admin block required). The # column in the Admin&apos;s Presets table shows each preset&apos;s current index.</td></tr>
     <tr><td class="io-nr input center">E13</td><td class="io-name">StartRadioName</td><td class="io-init string center"></td><td class="io-descr">Preset name (case-insensitive) from the Sonos Admin library. Use this when binding to a Gira visualisation dropdown or text input where the name is more convenient than tracking an index.</td></tr>
     <tr><td class="io-nr input center">E14</td><td class="io-name">GroupPreset</td><td class="io-init center">0</td><td class="io-descr">Form a Sonos zone group from a predefined preset (Admin's Group presets section). Alphabetical index 1..N. The trigger Player block needn't be the master — master + members come from the Admin definition.</td></tr>
     <tr><td class="io-nr input center">E15</td><td class="io-name">GroupPresetName</td><td class="io-init string center"></td><td class="io-descr">Form a group preset by name (case-insensitive).</td></tr>
@@ -80,7 +80,6 @@
     <tr><td class="io-nr input center">E20</td><td class="io-name">SubTimeout</td><td class="io-init center">1800</td><td class="io-descr">UPnP subscription timeout granted to the player.</td></tr>
     <tr><td class="io-nr input center">E21</td><td class="io-name">HttpTimeout</td><td class="io-init center">5</td><td class="io-descr">HTTP request timeout in seconds.</td></tr>
     <tr><td class="io-nr input center">E22</td><td class="io-name">CallbackBase</td><td class="io-init string center"></td><td class="io-descr">Callback base URL for UPnP. Leave empty for auto detection.</td></tr>
-    <tr><td class="io-nr input center">E23..E30</td><td class="io-name">Preset1Uri..Preset8Uri</td><td class="io-init string center"></td><td class="io-descr">Stream URIs for preset slots 1 to 8.</td></tr>
   </table>
 </div>
 

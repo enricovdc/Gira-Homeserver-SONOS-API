@@ -548,7 +548,6 @@ class LogicModule:
         self._uuid = ""           # Sonos RINCON UUID — needed to build queue URI
         self._active_station = 0
         self._online = False
-        self._stations = {}  # idx -> uri
         self._poll_interval_s = 60
         self._renew_threshold_s = 300  # renew when < this remaining
         self._sub_timeout_s = 1800
@@ -726,8 +725,6 @@ class LogicModule:
         if not cb:
             cb = "http://{}:{}".format(_get_local_lan_ip(), self._notify_port)
         self._callback_base = cb
-        for i in range(1, 9):
-            self._stations[i] = to_str(inputs["Station{}Uri".format(i)].value).strip()
 
     # ----- Action wrappers -------------------------------------------------
 
@@ -961,33 +958,29 @@ class LogicModule:
             self.fw.run_in_context(self._write_error, (err or "UNGROUP_FAILED",))
 
     def _action_start_radio(self, spec):
-        """Start a station identified either by a positive integer
-        (alphabetical index into the Admin station library, or 1..8
-        into the per-player StationNUri inputs as fallback) OR by the
-        station's name string (case-insensitive lookup in the Admin
-        library).
+        """Start a preset identified either by a positive integer
+        (alphabetical index into the Admin preset library) OR by the
+        preset name (case-insensitive lookup in the same library).
 
-        Resolution order: Admin's global station library first (carries
-        the DIDL-Lite metadata needed for Sonos cloud favorites like
-        TuneIn and Spotify), falling back to the per-player StationNUri
-        input when no Admin block is present and the spec is an int.
+        The Admin block (LBS 22001) MUST be on the canvas for preset
+        playback to work — its registry is the single source of truth
+        for URIs and the DIDL-Lite metadata required for Sonos cloud
+        favorites (TuneIn, Spotify, …). Errors surface as
+        PRESET_NOT_FOUND on the LastError output.
         """
+        # The Admin block's preset library is the single source of
+        # truth — there are no per-player preset slots anymore. If no
+        # match exists in the library (admin not loaded, or unknown
+        # spec) we surface PRESET_NOT_FOUND.
         admin_rec = _lookup_station_via_admin(spec)
-        if admin_rec:
-            uri = admin_rec.get("uri") or ""
-            metadata = admin_rec.get("metadata") or ""
-            spec_label = spec  # for the error message + active-station marker
-        else:
-            # Fall back to the per-player input slot when spec is an int.
-            uri = ""
-            metadata = ""
-            if isinstance(spec, int) or (isinstance(spec, str) and spec.isdigit()):
-                idx = int(spec)
-                uri = self._stations.get(idx, "") or ""
-            spec_label = spec
-        if not uri:
-            self.fw.run_in_context(self._write_error, ("STATION_NOT_FOUND: {}".format(spec_label),))
+        if not admin_rec or not admin_rec.get("uri"):
+            self.fw.run_in_context(
+                self._write_error,
+                ("PRESET_NOT_FOUND: {}".format(spec),),
+            )
             return
+        uri = admin_rec["uri"]
+        metadata = admin_rec.get("metadata") or ""
 
         # Containers (Spotify/Apple playlists, Sonos saved queues, …)
         # cannot be SetAVTransportURI'd directly — they must be added to
