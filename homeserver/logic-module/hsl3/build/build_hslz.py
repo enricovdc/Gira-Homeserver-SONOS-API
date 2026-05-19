@@ -91,14 +91,21 @@ def run_generator(gen_path: str, py39: str, config_json: Path, target_hsl: Path)
 
 
 def verify_hsl_field_count(hsl_path: Path, n_inputs: int, n_outputs: int) -> bool:
-    """Per the SDK invariant: record-5000 line is pipe-delimited; the field
-    count must equal 4 + n_inputs + 1 + n_outputs + 1."""
-    expected = 4 + n_inputs + 1 + n_outputs + 1
+    """HSL3 record-5000 layout (verified against the SDK generator output):
+
+        5000 | "cat\\name" | remanent | n_in | <in_labels> | n_out |
+              <out_labels> | "version" | <flag1> | <flag2>
+
+    Field count = 4 + n_inputs + 1 + n_outputs + 1 + 2 = 8 + n_in + n_out.
+    The two trailing flags are not documented in the public SDK doc but
+    are emitted by every generator run. The SKILL.md formula omits them
+    so this check uses the empirically-correct HSL3 formula."""
+    expected = 8 + n_inputs + n_outputs
     try:
         with hsl_path.open("r", encoding="utf-8", errors="replace") as fh:
             for line in fh:
                 if line.startswith("5000|"):
-                    n = len(line.split("|"))
+                    n = len(line.rstrip("\n").split("|"))
                     if n != expected:
                         print(f"  WARNING: record 5000 has {n} fields, expected {expected}")
                         return False

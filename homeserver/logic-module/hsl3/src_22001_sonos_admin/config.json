@@ -24,10 +24,8 @@
       { "type": "number", "identifier": "LastDiscoveryCount",  "init_value": 0,  "label": "Last Scan Count" },
       { "type": "string", "identifier": "LastError",           "init_value": "", "label": "Last Error" }
     ],
-    "store": [
-      { "type": "number", "identifier": "Reserved", "init_value": 0 }
-    ],
-    "timer": [
+    "stores": [],
+    "timers": [
       { "identifier": "Tick" }
     ],
     "scripts": [
