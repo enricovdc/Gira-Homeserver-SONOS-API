@@ -694,6 +694,15 @@ code { background: #f5f5f5; padding: 1px 6px; border: 1px solid #e8e8e8;
                                       color: #a0a0a0; font-style: italic; }
 .player-card .pc-uuid { font-family: ui-monospace, 'Courier New', monospace;
                         font-size: 11px; color: #707070; word-break: break-all; }
+/* Click-to-copy affordance on the UUID. The label below the zone name
+   is the "Use as Host" mechanism — clicking the UUID copies it into
+   the clipboard so the integrator can paste straight into the Sonos
+   Player block's Host input. */
+.player-card .pc-uuid-copy { cursor: pointer; padding: 1px 4px;
+                             border-radius: 2px; transition: background 0.15s; }
+.player-card .pc-uuid-copy:hover { background: #BACE00; color: #202020; }
+.player-card .pc-uuid-copy::before { content: "⧉  ";
+                                     font-family: inherit; opacity: 0.6; }
 .player-card .pc-grid { display: grid; gap: 6px 16px; align-items: center;
                         grid-template-columns: minmax(0, 1fr) minmax(0, 1fr)
                                                minmax(0, 1fr) auto; }
@@ -765,8 +774,8 @@ details.group-add .row { margin-top: 6px; }
     <div id="players-state" class="muted">Loading...</div>
     <p class="muted">For the Sonos Player block's <code>Host</code> input,
        prefer the <strong>UUID</strong> (stable across firmware updates and
-       DHCP renumbering). Click the <em>Use as Host</em> button on a row to
-       copy a value to the clipboard.</p>
+       DHCP renumbering). <strong>Click the UUID</strong> below to copy it
+       to the clipboard.</p>
     <div id="players" class="player-list"></div>
     <div class="row">
       <input id="np-name" placeholder="name (e.g. livingroom)" style="max-width: 180px">
@@ -905,18 +914,23 @@ async function refreshPlayers() {
   for (const p of r.players) {
     const zone = p.zoneName || '';
     const uuid = p.uuid || '';
-    // The "Use as Host" button copies the most stable identifier available
-    // (UUID > MAC > IP) into the clipboard for pasting into the Sonos
-    // Player block's Host input.
-    const hostValue = uuid || p.mac || p.ip || '';
     const card = document.createElement('div');
     card.className = 'player-card';
+    // The UUID itself is the "Use as Host" affordance: click to copy
+    // into the clipboard for pasting into the Sonos Player block's
+    // Host input. Hover state + a small "click to copy" tooltip make
+    // the interaction discoverable without taking up a button slot.
+    const uuidContent = uuid
+      ? '<span class="pc-uuid pc-uuid-copy" data-host="' + esc(uuid) +
+        '" title="Click to copy UUID for the Sonos Player Host input">' +
+        esc(uuid) + '</span>'
+      : '<span class="pc-uuid"><em>no UUID yet</em></span>';
     card.innerHTML =
       '<div class="pc-head">' +
         '<div class="pc-zone">' + esc(zone) + '</div>' +
         '<span class="pill ' + esc(p.source) + '">' + esc(p.source) + '</span>' +
       '</div>' +
-      '<div class="pc-uuid">' + (uuid ? esc(uuid) : '<em>no UUID yet</em>') + '</div>' +
+      '<div>' + uuidContent + '</div>' +
       '<div class="pc-grid" style="margin-top:8px">' +
         '<div class="pc-field">' +
           '<label>Custom name</label>' +
@@ -931,7 +945,6 @@ async function refreshPlayers() {
           '<input data-edit="' + esc(p.id) + '" data-field="mac" value="' + esc(p.mac) + '">' +
         '</div>' +
         '<div class="pc-actions">' +
-          '<button class="secondary small" data-host="' + esc(hostValue) + '" title="Copy Host value">Use as Host</button>' +
           '<button class="secondary small" data-favs="' + esc(p.id) + '" title="Browse Sonos Favorites on this player">Favorites</button>' +
           '<button class="danger small" data-del-player="' + esc(p.id) + '" title="Remove">x</button>' +
         '</div>' +
