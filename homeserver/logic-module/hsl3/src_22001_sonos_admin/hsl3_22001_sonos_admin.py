@@ -271,8 +271,8 @@ def _ssdp_scan(timeout_sec=4):
             m = re.search(r"uuid:([A-Za-z0-9_-]+)", headers.get("USN", ""))
             uuid = m.group(1) if m else ""
             location = headers.get("LOCATION", "")
-            model = _fetch_model(location) if location else ""
-            found[ip] = {"ip": ip, "uuid": uuid, "model": model}
+            info = _fetch_device_info(location) if location else {"model": "", "zoneName": ""}
+            found[ip] = {"ip": ip, "uuid": uuid, "model": info["model"], "zoneName": info["zoneName"]}
         return list(found.values())
     finally:
         try:
@@ -281,19 +281,28 @@ def _ssdp_scan(timeout_sec=4):
             pass
 
 
-def _fetch_model(location):
+def _fetch_device_info(location):
+    """Pull the player's friendly room name + model from its UPnP device
+    description XML. The Sonos app's "Zone name" is exposed as
+    <roomName>...</roomName> in /xml/device_description.xml. Returns an
+    empty dict on failure so discovery still works for offline players."""
     try:
         resp = requests.get(location, timeout=2)
-        m = re.search(r"<modelName>([^<]+)</modelName>", resp.text)
-        return m.group(1) if m else ""
+        text = resp.text
     except Exception:
-        return ""
+        return {"model": "", "zoneName": ""}
+    model_m = re.search(r"<modelName>([^<]+)</modelName>", text)
+    room_m = re.search(r"<roomName>([^<]+)</roomName>", text)
+    return {
+        "model": model_m.group(1) if model_m else "",
+        "zoneName": room_m.group(1) if room_m else "",
+    }
 
 
 def scan_and_merge(timeout_sec=4):
     """Run an SSDP scan; merge results into the registry. Manually-added
     players keep their `source = "manual"` flag and are not overwritten.
-    Returns the raw scan list (each item: {ip, uuid, model})."""
+    Returns the raw scan list."""
     discovered = _ssdp_scan(timeout_sec)
     arp = _read_arp_table()
     now = time.time()
@@ -301,8 +310,9 @@ def scan_and_merge(timeout_sec=4):
         for d in discovered:
             mac = arp.get(d["ip"], "") or _resolve_mac_for_ip(d["ip"])
             rec = {
-                "id": mac or d["ip"],
+                "id": d.get("uuid") or mac or d["ip"],
                 "name": "",
+                "zoneName": d.get("zoneName", ""),
                 "ip": d["ip"],
                 "mac": mac,
                 "uuid": d["uuid"],
@@ -312,18 +322,23 @@ def scan_and_merge(timeout_sec=4):
             }
             existing = None
             for pid, p in _players.items():
-                if (mac and p.get("mac") == mac) or p.get("ip") == d["ip"] or (d["uuid"] and p.get("uuid") == d["uuid"]):
+                if (d["uuid"] and p.get("uuid") == d["uuid"]) or \
+                   (mac and p.get("mac") == mac) or \
+                   p.get("ip") == d["ip"]:
                     existing = pid
                     break
             if existing:
-                # Refresh IP (DHCP may have renumbered), keep name + source.
+                # Refresh IP (DHCP may have renumbered), keep custom name + source.
                 _players[existing]["ip"] = d["ip"]
                 if mac:
                     _players[existing]["mac"] = mac
                 if d["uuid"] and not _players[existing].get("uuid"):
                     _players[existing]["uuid"] = d["uuid"]
-                if d["model"] and not _players[existing].get("model"):
+                if d["model"]:
                     _players[existing]["model"] = d["model"]
+                if d.get("zoneName"):
+                    # roomName tracks renames in the Sonos app — always refresh.
+                    _players[existing]["zoneName"] = d["zoneName"]
                 _players[existing]["lastSeen"] = now
             else:
                 _players[rec["id"]] = rec
@@ -344,44 +359,123 @@ INDEX_HTML = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sonos Admin</title>
+<title>Sonos Admin - Gira HomeServer</title>
 <style>
-:root { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
-body { margin: 0; background: #f5f6f8; color: #1a1f2c; }
-header { background: #1f6feb; color: #fff; padding: 1rem 1.5rem; }
-header h1 { margin: 0; font-size: 1.2rem; }
-main { max-width: 980px; margin: 1.25rem auto; padding: 0 1rem; }
-section { background: #fff; border: 1px solid #d7dce3; border-radius: 8px; margin-bottom: 1rem; padding: 1rem 1.25rem; }
-section h2 { margin: 0 0 0.5rem; font-size: 1rem; }
-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
-th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid #eef0f3; vertical-align: middle; }
-th { background: #f7f8fa; font-weight: 600; }
-input[type=text], input[type=url] { width: 100%; padding: 0.35rem 0.5rem; border: 1px solid #cdd3dc; border-radius: 4px; font: inherit; box-sizing: border-box; }
-button { font: inherit; padding: 0.4rem 0.75rem; background: #1f6feb; color: #fff; border: 0; border-radius: 4px; cursor: pointer; }
-button.secondary { background: #6b7280; }
-button.danger { background: #c0392b; }
-.row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-top: 0.5rem; }
-.muted { color: #6b7280; font-size: 0.85rem; }
-.pill { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 0.75rem; font-weight: 600; }
-.pill.ssdp { background: #def7ec; color: #03543e; }
-.pill.manual { background: #e1effe; color: #1e429f; }
-.toast { position: fixed; right: 1rem; bottom: 1rem; background: #1f6feb; color: #fff; padding: 0.6rem 1rem; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.2); display: none; }
-.toast.error { background: #c0392b; }
-code { background: #f1f3f6; padding: 1px 5px; border-radius: 3px; font-size: 0.85em; }
-.grid { display: grid; grid-template-columns: 200px 1fr; gap: 0.5rem 1rem; }
+/* Gira HomeServer base palette + typography, mirrored from /main-site/hs.css */
+html { overflow-y: scroll; }
+body { margin: 0; background-color: rgb(230,230,230); color: rgb(32,32,32);
+       font-family: 'Univers Next W1G', 'Verdana', 'Helvetica', 'Arial', sans-serif;
+       font-size: 12px; padding: 0; }
+h1 { font-weight: normal; font-size: 39px; margin: 0; }
+h2 { font-weight: 400; font-size: 18px; margin: 20px 0; }
+h3 { font-weight: 400; font-size: 14px; margin: 0 0 12px; }
+p  { font-size: 12px; }
+a  { color: #969696; text-decoration: none; }
+
+.container { position: relative; left: 0; width: 939px; margin: 0 auto; text-align: left; }
+@media only screen and (max-width: 1023px) {
+  .container { width: auto; }
+}
+.content { background-color: white; }
+.header  { margin: 0 30px; border-bottom: 1px solid #c0c0c0;
+           margin-bottom: 30px; padding: 37px 0; }
+.header > img { display: inline-block; width: 120px; height: 30px;
+                margin-right: 20px; vertical-align: middle; }
+.header > h1  { display: inline-block; vertical-align: middle; }
+.block { padding: 0 30px; }
+
+/* Section ("group") cards in the body */
+section { margin-bottom: 30px; }
+section > h2 { border-bottom: 1px solid #c0c0c0; padding-bottom: 8px; }
+section > .muted { color: #808080; font-size: 12px; margin: 0 0 12px; }
+
+/* Tables */
+table { width: 100%; border-collapse: collapse; font-size: 12px;
+        border-top: 1px solid #c0c0c0; border-bottom: 1px solid #c0c0c0; }
+th, td { text-align: left; padding: 8px 6px; vertical-align: middle; }
+th { background: #f5f5f5; font-weight: 400; border-bottom: 1px solid #c0c0c0;
+     color: #505050; }
+tr:not(:last-child) > td { border-bottom: 1px solid #e8e8e8; }
+
+/* Form controls */
+input[type=text], input[type=url], input[type=number] {
+  width: 100%; padding: 6px 8px; border: 1px solid #c0c0c0;
+  font: inherit; box-sizing: border-box; background: white;
+}
+input:focus { outline: 1px solid #BACE00; }
+
+/* Gira buttons: pill-shaped, dark gray with green hover */
+button {
+  border: 0; border-radius: 25px; min-width: 100px; height: 36px;
+  margin: 6px 8px 6px 0; padding: 0 18px;
+  background-color: #505050; color: white; cursor: pointer;
+  font: inherit; font-size: 12px;
+}
+button:hover    { background-color: #BACE00; color: #323232; }
+button:disabled { background-color: #d0d0d0; color: #505050; cursor: not-allowed; }
+button.danger   { background-color: #a83232; min-width: 36px; padding: 0 10px; }
+button.danger:hover  { background-color: #BACE00; color: #323232; }
+button.secondary     { background-color: #707070; }
+button.small         { min-width: 80px; height: 28px; font-size: 11px; padding: 0 12px; margin: 0 4px 0 0; }
+
+/* Inline form row under each table */
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+
+/* Source indicator (replaces the old colored pills) */
+.pill { display: inline-block; padding: 2px 10px; font-size: 11px;
+        font-weight: 400; border: 1px solid #c0c0c0; color: #505050;
+        background: white; }
+.pill.ssdp   { border-color: #BACE00; color: #5a6a00; }
+.pill.manual { border-color: #707070; color: #404040; }
+
+/* Toast: subtle Gira-styled bottom-right banner */
+.toast { position: fixed; right: 30px; bottom: 30px; background: #505050;
+         color: white; padding: 10px 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+         display: none; font-size: 12px; }
+.toast.error { background: #a83232; }
+
+code { background: #f5f5f5; padding: 1px 6px; border: 1px solid #e8e8e8;
+       font-family: ui-monospace, 'Courier New', monospace; font-size: 0.85em; }
+
+/* Two-column "grid" used by the Cloud section */
+.grid { display: grid; grid-template-columns: 224px 1fr; gap: 6px 12px;
+        margin-bottom: 8px; }
+.grid > label { font-size: 12px; color: #505050; align-self: center; }
+
+/* Footers, mirroring the HS index page */
+.footer1 { display: flex; background-color: #f5f5f5; padding: 10px 30px;
+           font-size: 14px; height: 24px; line-height: 24px; }
+.footer1 > .left  { display: inline; width: 60%; }
+.footer1 > .right { display: inline; width: 40%; text-align: right; }
+.footer2 { background-color: rgb(230,230,230); padding: 10px 30px;
+           font-size: 12px; color: #808080; }
+.footer2 > a { color: inherit; text-decoration: none; margin-right: 18px; }
 </style>
 </head>
 <body>
-<header><h1>Sonos Admin</h1></header>
-<main>
+<div class="container">
+<div class="content">
+<div class="header">
+  <h1>Sonos Admin</h1>
+</div>
+<div class="block">
   <section>
     <h2>Players</h2>
     <div id="players-state" class="muted">Loading...</div>
+    <p class="muted">For the Sonos Player block's <code>Host</code> input,
+       prefer the <strong>UUID</strong> (stable across firmware updates and
+       DHCP renumbering). Click the <em>Use as Host</em> button on a row to
+       copy a value to the clipboard.</p>
     <table id="players">
       <thead><tr>
-        <th style="width:18%">Name</th><th style="width:18%">IP</th>
-        <th style="width:24%">MAC</th><th style="width:14%">Model</th>
-        <th style="width:12%">Source</th><th style="width:14%">Actions</th>
+        <th style="width:16%">Zone (Sonos)</th>
+        <th style="width:14%">Custom name</th>
+        <th style="width:18%">UUID</th>
+        <th style="width:13%">IP</th>
+        <th style="width:14%">MAC</th>
+        <th style="width:10%">Model</th>
+        <th style="width:7%">Src</th>
+        <th style="width:8%">Actions</th>
       </tr></thead><tbody></tbody>
     </table>
     <div class="row">
@@ -426,7 +520,19 @@ code { background: #f1f3f6; padding: 1px 5px; border-radius: 3px; font-size: 0.8
     <h2>Diagnostics</h2>
     <div class="muted" id="diag">Loading...</div>
   </section>
-</main>
+</div>
+<div class="footer1">
+  <div class="left">Sonos Admin &middot; LBS 22001</div>
+  <div class="right"><a href="/info" target="_blank">/info</a></div>
+</div>
+<div class="footer2">
+  <a href="/api/players">/api/players</a>
+  <a href="/api/stations">/api/stations</a>
+  <a href="/api/cloud">/api/cloud</a>
+  <a href="/tile.html">/tile.html</a>
+</div>
+</div>
+</div>
 <div id="toast" class="toast"></div>
 
 <script>
@@ -454,13 +560,24 @@ async function refreshPlayers() {
   tbody.innerHTML = '';
   for (const p of r.players) {
     const tr = document.createElement('tr');
+    const zone = p.zoneName || '';
+    const uuid = p.uuid || '';
+    // The "Use as Host" button copies the most stable identifier
+    // available (UUID > MAC > IP) into the clipboard for pasting into
+    // the Sonos Player block's Host input.
+    const hostValue = uuid || p.mac || p.ip || '';
     tr.innerHTML =
-      '<td><input data-edit="' + esc(p.id) + '" data-field="name" value="' + esc(p.name) + '"></td>' +
+      '<td><strong>' + esc(zone) + '</strong></td>' +
+      '<td><input data-edit="' + esc(p.id) + '" data-field="name" value="' + esc(p.name) + '" placeholder="(none)"></td>' +
+      '<td><code style="font-size: 0.78em">' + esc(uuid) + '</code></td>' +
       '<td><input data-edit="' + esc(p.id) + '" data-field="ip"   value="' + esc(p.ip)   + '"></td>' +
       '<td><input data-edit="' + esc(p.id) + '" data-field="mac"  value="' + esc(p.mac)  + '"></td>' +
       '<td>' + esc(p.model || '') + '</td>' +
       '<td><span class="pill ' + esc(p.source) + '">' + esc(p.source) + '</span></td>' +
-      '<td><button class="danger" data-del-player="' + esc(p.id) + '">Remove</button></td>';
+      '<td>' +
+        '<button class="secondary small" data-host="' + esc(hostValue) + '" title="Copy Host value">Use as Host</button>' +
+        '<button class="danger small" data-del-player="' + esc(p.id) + '">x</button>' +
+      '</td>';
     tbody.appendChild(tr);
   }
   document.getElementById('players-state').textContent =
@@ -475,7 +592,7 @@ async function refreshStations() {
     tr.innerHTML =
       '<td><input data-sedit="' + esc(s.id) + '" data-field="name" value="' + esc(s.name) + '"></td>' +
       '<td><input data-sedit="' + esc(s.id) + '" data-field="uri"  value="' + esc(s.uri)  + '"></td>' +
-      '<td><button class="danger" data-del-station="' + esc(s.id) + '">Remove</button></td>';
+      '<td><button class="danger small" data-del-station="' + esc(s.id) + '">x</button></td>';
     tbody.appendChild(tr);
   }
 }
@@ -523,6 +640,18 @@ document.addEventListener('click', async (ev) => {
     if (t.dataset.delStation) {
       await api('DELETE', '/api/stations/' + encodeURIComponent(t.dataset.delStation));
       refreshAll();
+    }
+    if (t.dataset.host !== undefined) {
+      // Copy the player's UUID/MAC/IP to the clipboard so the integrator
+      // can paste it directly into the Sonos Player block's Host input.
+      const v = t.dataset.host || '';
+      if (!v) return toast('No identifier available', true);
+      try { await navigator.clipboard.writeText(v); toast('Copied: ' + v); }
+      catch (e) {
+        // Older browsers without clipboard API: show the value so the user
+        // can copy it manually.
+        prompt('Copy this value into the Sonos Player Host input:', v);
+      }
     }
   } catch (e) { toast(e.message, true); }
 });
@@ -576,6 +705,78 @@ setInterval(refreshAll, 15000);
 """
 
 
+def _icon_svg():
+    """A small Gira-grey speaker icon used in the tile fragment. Inline SVG
+    so the integrator doesn't have to copy a separate image file into the
+    HomeServer's /main-site/ tree."""
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 44" width="24" height="44">'
+        '<rect x="2" y="2" width="20" height="40" rx="2" '
+        'fill="none" stroke="#505050" stroke-width="1.5"/>'
+        '<circle cx="12" cy="14" r="3.5" fill="none" stroke="#505050" stroke-width="1.5"/>'
+        '<circle cx="12" cy="30" r="6" fill="none" stroke="#505050" stroke-width="1.5"/>'
+        '<circle cx="12" cy="30" r="2" fill="#505050"/>'
+        '</svg>'
+    )
+
+
+def _tile_fragment(base_url):
+    """Return the HTML <a class="box"> tile a Gira integrator drops into
+    /main-site/index.html alongside the existing tiles. Same structure as
+    the built-in 'Manage Sonos Favorites' tile so the styling is automatic."""
+    return (
+        '<a id="config_sonos_admin" class="box" href="{url}" target="_blank">\n'
+        '  <img class="box_img" src="{url}/icon.svg" />\n'
+        '  <div class="title">Sonos Admin</div>\n'
+        '  <div class="descr">Manage Sonos players, radio stations, and Cloud authorization.</div>\n'
+        '  <div class="url">{url}</div>\n'
+        '  <div class="link">&gt; call-up</div>\n'
+        '</a>\n'
+    ).format(url=base_url.rstrip("/"))
+
+
+def _tile_page(base_url):
+    """A complete, standalone Gira-styled page that consists of a single tile
+    pointing at the Admin URL. Useful for iframe-embedding in the HomeServer
+    visualisation or as a quick visual check that the styling works."""
+    url = base_url.rstrip("/")
+    return (
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<title>Sonos Admin tile</title>"
+        "<style>"
+        "html{overflow-y:scroll}"
+        "body{margin:0;background:#e6e6e6;color:#202020;"
+        "font-family:'Univers Next W1G','Verdana','Helvetica','Arial',sans-serif;font-size:12px}"
+        ".container{width:939px;margin:0 auto}"
+        "@media (max-width:1023px){.container{width:auto}}"
+        ".content{background:white}"
+        ".header{margin:0 30px;border-bottom:1px solid #c0c0c0;padding:37px 0;margin-bottom:30px}"
+        ".header h1{margin:0;font-weight:normal;font-size:39px}"
+        ".block{padding:0 30px 30px}"
+        ".box_list{position:relative;display:flex;margin-bottom:30px;"
+        "border-top:1px solid #c0c0c0;border-bottom:1px solid #c0c0c0;width:auto}"
+        ".box{display:flex;width:293px;height:277px;position:relative;font-size:14px;"
+        "text-align:left;cursor:pointer;border-right:1px solid #c0c0c0;overflow:hidden;"
+        "color:#000;text-decoration:none}"
+        ".box:hover{background:#f0f0f0}"
+        ".box_img{position:absolute;left:10px;top:10px;width:24px;height:44px}"
+        ".box .title{position:absolute;left:10px;top:69px;width:180px;height:21px;"
+        "font-weight:400;color:#000}"
+        ".box .descr{position:absolute;left:10px;top:118px;width:calc(100% - 20px);"
+        "height:66px;font-size:12px;color:#ADABB1}"
+        ".box .url{position:absolute;left:10px;top:178px;width:265px;font-size:12px;"
+        "color:#ADABB1;overflow:hidden}"
+        ".box .link{position:absolute;left:10px;top:246px;font-size:12px;color:#969696}"
+        "</style></head><body>"
+        "<div class=\"container\"><div class=\"content\">"
+        "<div class=\"header\"><h1>Sonos</h1></div>"
+        "<div class=\"block\"><div class=\"box_list\">"
+        + _tile_fragment(url) +
+        "</div></div></div></div></body></html>"
+    )
+
+
 class _AdminHandler(BaseHTTPRequestHandler):
     """Routes HTTP requests for the admin UI."""
 
@@ -626,9 +827,30 @@ class _AdminHandler(BaseHTTPRequestHandler):
                 return self._oauth_start()
             if path == "/oauth/callback":
                 return self._oauth_callback()
+            if path == "/tile.html":
+                # Standalone Gira-styled "single tile" page — useful for
+                # iframe-embedding from the HomeServer default page when the
+                # integrator can't modify the main HTML.
+                base = self._public_origin()
+                return self._send(200, _tile_page(base), "text/html; charset=utf-8")
+            if path == "/tile.fragment":
+                # Bare <a class="box"> HTML for pasting into the HomeServer's
+                # /main-site/index.html template.
+                base = self._public_origin()
+                return self._send(200, _tile_fragment(base), "text/html; charset=utf-8")
+            if path == "/icon.svg":
+                return self._send(200, _icon_svg(), "image/svg+xml")
             self._err(404, "NOT_FOUND", "no such route")
         except Exception as exc:  # noqa: BLE001
             self._err(500, "INTERNAL", str(exc))
+
+    def _public_origin(self):
+        """Best-effort public URL for this Admin instance, used in the tile
+        snippet so the rendered fragment points back at the right HS-IP."""
+        host_hdr = self.headers.get("Host", "")
+        if host_hdr:
+            return "http://" + host_hdr
+        return "http://{}:{}".format(_get_local_lan_ip(), self.server.admin.listener_port)
 
     def do_POST(self):  # noqa: N802
         try:
@@ -907,13 +1129,32 @@ class LogicModule:
         # If only IP given, try to resolve MAC for DHCP-resilience.
         if ip and not mac:
             mac = _resolve_mac_for_ip(ip)
+        # Best-effort fetch of UUID + zoneName + model directly from the
+        # player so manually-added entries are still recognizable in the UI
+        # before the next SSDP scan completes.
+        uuid = ""
+        zone_name = ""
+        model = ""
+        if ip:
+            info = _fetch_device_info("http://{}:1400/xml/device_description.xml".format(ip))
+            model = info.get("model", "")
+            zone_name = info.get("zoneName", "")
+            # UUID is in the same XML as <UDN>uuid:RINCON_xxx</UDN>.
+            try:
+                resp = requests.get("http://{}:1400/xml/device_description.xml".format(ip), timeout=2)
+                m = re.search(r"<UDN>uuid:([A-Za-z0-9_-]+)</UDN>", resp.text)
+                if m:
+                    uuid = m.group(1)
+            except Exception:
+                pass
         rec = {
-            "id": mac or ip,
+            "id": uuid or mac or ip,
             "name": name,
+            "zoneName": zone_name,
             "ip": ip,
             "mac": mac,
-            "uuid": "",
-            "model": "",
+            "uuid": uuid,
+            "model": model,
             "source": "manual",
             "lastSeen": time.time(),
         }

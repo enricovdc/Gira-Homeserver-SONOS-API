@@ -365,11 +365,58 @@ class TestSonosAdmin(unittest.TestCase):
     def test_resolve_host_by_mac_in_registry(self):
         with self.mod._registry_lock:
             self.mod._players["x"] = {
-                "id": "x", "name": "lr", "ip": "10.0.0.42",
-                "mac": "00:0e:58:ab:cd:ef", "uuid": "", "model": "",
-                "source": "manual",
+                "id": "x", "name": "lr", "zoneName": "Living Room",
+                "ip": "10.0.0.42", "mac": "00:0e:58:ab:cd:ef",
+                "uuid": "", "model": "", "source": "manual",
             }
         self.assertEqual(self.mod.resolve_host("00:0E:58:AB:CD:EF"), "10.0.0.42")
+
+    def test_resolve_host_by_uuid_in_registry(self):
+        """UUID (RINCON_xxx) is the recommended Host value; admin must
+        resolve it to the current IP."""
+        with self.mod._registry_lock:
+            self.mod._players["x"] = {
+                "id": "x", "name": "", "zoneName": "Bedroom",
+                "ip": "10.0.0.99", "mac": "", "uuid": "RINCON_AABBCC112233",
+                "model": "", "source": "ssdp",
+            }
+        self.assertEqual(self.mod.resolve_host("RINCON_AABBCC112233"), "10.0.0.99")
+
+    def test_player_record_carries_zone_name(self):
+        """SSDP-discovered and manually-added records must carry zoneName
+        so the Admin UI can display it."""
+        with self.mod._registry_lock:
+            self.mod._players["x"] = {
+                "id": "x", "name": "", "zoneName": "Kitchen",
+                "ip": "10.0.0.5", "mac": "", "uuid": "RINCON_DEAD",
+                "model": "PLAY:1", "source": "ssdp",
+            }
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        listing = lm.api_list_players()
+        self.assertEqual(len(listing["players"]), 1)
+        self.assertEqual(listing["players"][0]["zoneName"], "Kitchen")
+        self.assertEqual(listing["players"][0]["uuid"], "RINCON_DEAD")
+
+    def test_fetch_device_info_parses_roomname_and_model(self):
+        """The new _fetch_device_info helper extracts both <roomName> and
+        <modelName> from a Sonos device description XML — needed so the
+        Admin UI can show 'Living Room' instead of just an IP."""
+        # Stub requests.get to return a synthetic XML.
+        original = self.mod.requests.get
+        class _Resp:
+            text = ("<?xml version='1.0'?><root>"
+                    "<device><modelName>PLAY:5</modelName>"
+                    "<roomName>Living Room</roomName>"
+                    "<UDN>uuid:RINCON_AA</UDN></device></root>")
+        try:
+            self.mod.requests.get = lambda *a, **kw: _Resp()
+            info = self.mod._fetch_device_info("http://10.0.0.1:1400/xml/device_description.xml")
+            self.assertEqual(info["model"], "PLAY:5")
+            self.assertEqual(info["zoneName"], "Living Room")
+        finally:
+            self.mod.requests.get = original
 
     def test_get_station_uri_by_name(self):
         with self.mod._registry_lock:

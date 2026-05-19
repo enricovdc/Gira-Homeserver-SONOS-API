@@ -7,7 +7,7 @@
     "version": "1.0.0",
     "hsl_filename": "22000_sonos_player.hsl",
     "inputs": [
-      { "type": "string", "identifier": "Host",          "init_value": "",  "label": "Player Host (IP)" },
+      { "type": "string", "identifier": "Host",          "init_value": "",  "label": "Player Host UUID MAC name or IP" },
       { "type": "number", "identifier": "Play",          "init_value": 0,   "label": "Play" },
       { "type": "number", "identifier": "Pause",         "init_value": 0,   "label": "Pause" },
       { "type": "number", "identifier": "Stop",          "init_value": 0,   "label": "Stop" },
@@ -58,7 +58,7 @@
         "name": "Sonos Player",
         "category": "Multimedia\\Sonos",
         "translation_inputs": [
-          { "label": "Player Host IP" },
+          { "label": "Player Host UUID MAC Name oder IP" },
           { "label": "Wiedergabe starten" },
           { "label": "Pause" },
           { "label": "Stopp" },

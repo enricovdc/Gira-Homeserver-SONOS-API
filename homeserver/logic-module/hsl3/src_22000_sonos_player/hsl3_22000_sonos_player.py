@@ -16,6 +16,7 @@ import socket
 import sys
 import threading
 import time
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import requests
@@ -267,21 +268,27 @@ def resolve_host_spec(spec):
 _listener_lock = threading.Lock()
 _listener_started = False
 _listener_port = None
-# Maps "host" -> LogicModule instance so the listener can dispatch by URL.
+# Maps the player's *routing key* (raw Host input — typically a UUID like
+# RINCON_xxx) to its LogicModule instance. Using the spec rather than the
+# resolved IP keeps event delivery working across DHCP renumbering: the
+# subscription URL embeds the spec, the listener routes by the spec, and
+# the IP can change underneath without the listener's mapping going stale.
 _instances_by_host = {}
 
 
 class _NotifyHandler(BaseHTTPRequestHandler):
-    """Handles NOTIFY callbacks. URL format: /upnp/<host>/<service>."""
+    """Handles NOTIFY callbacks. URL format: /upnp/<routing-key>/<service>."""
 
     def do_NOTIFY(self):  # noqa: N802 — UPnP uses this method name
         try:
             length = int(self.headers.get("Content-Length", "0") or "0")
             body = self.rfile.read(length).decode("utf-8", errors="replace") if length else ""
             parts = self.path.strip("/").split("/")
-            # Expect ["upnp", "<host>", "<service>"]
+            # Expect ["upnp", "<routing-key>", "<service>"]
             if len(parts) >= 3 and parts[0] == "upnp":
-                host = parts[1]
+                # The key may contain characters that the subscriber URL-
+                # encoded (e.g. colons in a MAC). Decode before lookup.
+                host = urllib.parse.unquote(parts[1])
                 service = parts[2]
                 instance = _instances_by_host.get(host)
                 if instance is not None:
@@ -387,8 +394,10 @@ class LogicModule:
         self.debug.set("Last error", "-")
 
         self._reload_config(inputs)
-        if self._host:
-            _instances_by_host[self._host] = self
+        # Register under the spec (raw Host input) — typically a UUID — so
+        # the NOTIFY routing key stays stable across IP changes.
+        if self._host_spec:
+            _instances_by_host[self._host_spec] = self
 
         # Start the NOTIFY listener (idempotent — only first call binds).
         bound = _ensure_listener_started(self._notify_port)
@@ -403,15 +412,15 @@ class LogicModule:
         self.fw.set_timer("Tick", 5)
 
     def on_calc(self, inputs):
-        prev_host = self._host
+        prev_spec = self._host_spec
         self._reload_config(inputs)
-        if self._host != prev_host:
-            # Re-register under the new host name.
-            if prev_host and _instances_by_host.get(prev_host) is self:
-                _instances_by_host.pop(prev_host, None)
-            if self._host:
-                _instances_by_host[self._host] = self
-            # Invalidate subscriptions for the old host.
+        if self._host_spec != prev_spec:
+            # Re-register under the new routing key (the new spec value).
+            if prev_spec and _instances_by_host.get(prev_spec) is self:
+                _instances_by_host.pop(prev_spec, None)
+            if self._host_spec:
+                _instances_by_host[self._host_spec] = self
+            # Invalidate subscriptions for the old spec.
             self._sid_av = ""
             self._sid_rc = ""
             self._sub_av_exp = 0.0
@@ -703,11 +712,14 @@ class LogicModule:
         self._maintain_subscriptions()
 
     def _maintain_subscriptions(self):
-        if not self._callback_base:
+        if not self._callback_base or not self._host_spec:
             return
         now = time.time()
-        cb_av = "{}/upnp/{}/av".format(self._callback_base, self._host)
-        cb_rc = "{}/upnp/{}/rc".format(self._callback_base, self._host)
+        # URL-encode the routing key (typically a UUID; may also be a MAC
+        # with colons). The NotifyHandler URL-decodes before lookup.
+        rk = urllib.parse.quote(self._host_spec, safe="")
+        cb_av = "{}/upnp/{}/av".format(self._callback_base, rk)
+        cb_rc = "{}/upnp/{}/rc".format(self._callback_base, rk)
 
         if not self._sid_av or (self._sub_av_exp - now) < self._renew_threshold_s:
             self._subscribe_or_renew("av", "AVTransport", cb_av)
