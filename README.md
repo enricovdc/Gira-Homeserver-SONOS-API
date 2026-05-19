@@ -52,19 +52,42 @@ firmware **4.13+** (HSL3 / Python 3.9 logic-module SDK).
 
 ## Quick start
 
-1. **Grab the pre-built HSLZ archives** from the repo:
+1. **Finalize the HSLZ archives** for Experte import. The repo ships
+   spec-compliant `.hslz` shells (help pages + SDK stylesheet) plus the
+   `.py` + `config.json` source. The Gira HSL3 generator
+   (`generator3.cpython-39.pyc`, shipped with the Experte SDK) turns
+   the source into the deployable `.hsl` that goes inside each archive.
 
-   - [`homeserver/logic-module/hsl3/build/dist/22000_sonos_player.hslz`](homeserver/logic-module/hsl3/build/dist/22000_sonos_player.hslz)
-   - [`homeserver/logic-module/hsl3/build/dist/22001_sonos_admin.hslz`](homeserver/logic-module/hsl3/build/dist/22001_sonos_admin.hslz)
-
-   Each archive contains the Python source, `config.json`, EN+DE help
-   pages, the SDK stylesheet, and a `README-INSIDE.txt` with the
-   one-liner to finalise into a deployable `.hsl` on a machine that
-   has the Gira HSL3 generator. To rebuild from source:
+   On a machine that has the Experte SDK installed:
 
    ```sh
+   # 1. Produce the deployable .hsl files.
+   cd homeserver/logic-module/hsl3
+   python3.9 /path/to/generator3.cpython-39.pyc \
+       --source src_22000_sonos_player/config.json \
+       --target  build/dist/22000_sonos_player.hsl
+   python3.9 /path/to/generator3.cpython-39.pyc \
+       --source src_22001_sonos_admin/config.json \
+       --target  build/dist/22001_sonos_admin.hsl
+
+   # 2. Drop the .hsl files into the matching .hslz (flat root):
+   cd build/dist
+   zip -j 22000_sonos_player.hslz 22000_sonos_player.hsl
+   zip -j 22001_sonos_admin.hslz  22001_sonos_admin.hsl
+   ```
+
+   Alternatively, point the build script at the generator and it does
+   both steps in one go:
+
+   ```sh
+   GIRA_HSL3_GEN=/path/to/generator3.cpython-39.pyc \
+   PYTHON39=/path/to/python3.9 \
    python3 homeserver/logic-module/hsl3/build/build_hslz.py
    ```
+
+   The committed `.hslz` archives are not directly importable until the
+   `.hsl` has been added; each archive's `README-INSIDE.txt` carries
+   these same finalize instructions.
 
 2. **Import in Experte.** *Logikbausteine → Importieren* → pick the
    two `.hslz` files. The blocks appear under **Multimedia → Sonos**.

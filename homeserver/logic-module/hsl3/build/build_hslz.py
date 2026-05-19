@@ -119,34 +119,36 @@ def count_io(config_json: Path) -> tuple[int, int]:
 def build_hslz(module: dict, hsl_path: Path | None) -> Path:
     """Build a .hslz archive for one module.
 
-    Per the GiraHSL SDK, .hslz is a renamed .zip with all files flat at the
-    archive root. We always include:
+    Per the GiraHSL SDK the .hslz format is a renamed .zip with a strict
+    flat-root layout:
 
-      - Help pages (EN + DE) renamed to ``<LANG>-log<ID>.html`` with the
-        stylesheet href flattened.
-      - ``style.css`` from the SDK bundle.
-      - The Python source ``hsl3_<ID>_<name>.py`` so the SDK generator
-        can be re-run by anyone with the toolchain.
-      - The ``config.json`` describing inputs/outputs/store/timer.
-      - A ``README-INSIDE.txt`` that explains the archive layout and
-        the exact command to finalize it into an importable .hsl.
+        <ID>_<name>.hsl        deployable produced by generator3
+        EN-log<ID>.html        English help
+        DE-log<ID>.html        German help
+        style.css              SDK stylesheet
 
-    When the SDK generator was run successfully, we also include the
-    produced ``<ID>_<name>.hsl`` deployable. The archive is then
-    importable directly via Experte → Logikbausteine → Importieren.
+    Nothing else. The deployable .hsl is the binary the HomeServer
+    actually loads; it is the output of generator3.cpython-39.pyc
+    consuming our config.json plus the LogicModule source. The .py and
+    config.json themselves never belong inside the .hslz.
+
+    When the generator is on PATH (or pointed at via GIRA_HSL3_GEN) the
+    .hsl is added and the archive is import-ready. When not, the
+    archive is a spec-compliant shell that needs the .hsl dropped in.
+    A README-INSIDE.txt is added so anyone opening the zip sees the
+    exact finalize command and which sibling files in the source tree
+    feed it.
     """
     lbs_id = module["id"]
     name = module["name"]
     archive = DIST_DIR / f"{lbs_id}_{name}.hslz"
     archive.parent.mkdir(parents=True, exist_ok=True)
-    src_py = module["src_dir"] / f"hsl3_{lbs_id}_{name}.py"
-    config = module["src_dir"] / "config.json"
 
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:
-        # Deployable .hsl when the SDK generator produced one.
+        # 1. Deployable .hsl — only present when the SDK generator ran.
         if hsl_path and hsl_path.exists():
             z.write(hsl_path, arcname=hsl_path.name)
-        # Help pages — flat layout per the SDK spec.
+        # 2. Help pages — flat layout, stylesheet href rewritten.
         for lang_dir, lang_code in [(HELP_EN, "EN"), (HELP_DE, "DE")]:
             src = lang_dir / f"log{lbs_id}.html"
             if not src.exists():
@@ -154,51 +156,62 @@ def build_hslz(module: dict, hsl_path: Path | None) -> Path:
             text = src.read_text(encoding="utf-8")
             text = text.replace('href="../style.css"', 'href="style.css"')
             z.writestr(f"{lang_code}-log{lbs_id}.html", text)
+        # 3. SDK stylesheet.
         if STYLE_CSS.exists():
             z.write(STYLE_CSS, arcname="style.css")
-        # Always bundle the source so the SDK generator can be re-run
-        # against the same .hslz on a machine that has the toolchain.
-        if src_py.exists():
-            z.write(src_py, arcname=src_py.name)
-        if config.exists():
-            z.write(config, arcname="config.json")
-        # Inside-the-archive README so the integrator opening the file
-        # immediately knows what's what.
-        z.writestr("README-INSIDE.txt", _readme_inside(module, hsl_path is not None and hsl_path.exists()))
+        # 4. Finalize-instructions file (not part of the SDK spec but
+        #    Experte ignores unknown files in the archive root, and it
+        #    is invaluable for anyone debugging a missing .hsl).
+        z.writestr(
+            "README-INSIDE.txt",
+            _readme_inside(module, hsl_path is not None and hsl_path.exists()),
+        )
     return archive
 
 
 def _readme_inside(module: dict, hsl_included: bool) -> str:
     lbs_id = module["id"]
     name = module["name"]
-    status = "READY TO IMPORT" if hsl_included else "REQUIRES SDK GENERATOR"
-    finalize = "" if hsl_included else (
-        "\nThis archive does NOT yet contain the deployable .hsl file because\n"
-        "the Gira HSL3 generator was not available on the machine that built\n"
-        "the archive. To finalize:\n"
-        "\n"
-        "  1. On a machine with the Gira Experte SDK installed:\n"
-        "       python3.9 generator3.cpython-39.pyc \\\n"
-        f"           --source config.json --target {lbs_id}_{name}.hsl\n"
-        "\n"
-        "  2. Add the produced .hsl to this archive (drag it in alongside\n"
-        f"     EN-log{lbs_id}.html, DE-log{lbs_id}.html, style.css).\n"
-        "\n"
-        "  3. Now Experte can import the .hslz via Logikbausteine -> Importieren.\n"
-    )
+    if hsl_included:
+        return (
+            f"# Gira HSL3 logic module: LBS {lbs_id} {name}\n"
+            "# Status: READY TO IMPORT\n"
+            "#\n"
+            "# Layout (flat root per HSLZ spec):\n"
+            f"#   {lbs_id}_{name}.hsl       deployable produced by generator3\n"
+            f"#   EN-log{lbs_id}.html        English help page\n"
+            f"#   DE-log{lbs_id}.html        German help page\n"
+            "#   style.css                  SDK stylesheet (unmodified)\n"
+            "#\n"
+            "# Import in Experte via Logikbausteine -> Importieren.\n"
+        )
     return (
         f"# Gira HSL3 logic module: LBS {lbs_id} {name}\n"
-        f"# Status: {status}\n"
+        "# Status: INCOMPLETE - .hsl missing, requires SDK generator\n"
         "#\n"
-        "# Archive layout (flat root per HSLZ spec):\n"
-        f"#   {lbs_id}_{name}.hsl         deployable (present only when generated)\n"
-        f"#   EN-log{lbs_id}.html          English help page\n"
-        f"#   DE-log{lbs_id}.html          German help page\n"
-        "#   style.css                    SDK stylesheet (unmodified)\n"
-        f"#   hsl3_{lbs_id}_{name}.py     Python source for the LogicModule\n"
-        "#   config.json                  Inputs / outputs / store / timer / scripts\n"
-        "#   README-INSIDE.txt            This file.\n"
-        f"{finalize}"
+        "# Current archive contents (spec-compliant shell, NOT yet importable):\n"
+        f"#   EN-log{lbs_id}.html         English help page\n"
+        f"#   DE-log{lbs_id}.html         German help page\n"
+        "#   style.css                   SDK stylesheet\n"
+        "#   README-INSIDE.txt           This file\n"
+        "#\n"
+        "# To finalize on a machine with the Gira Experte SDK installed:\n"
+        "#\n"
+        "#   1. Take the source from this repository:\n"
+        f"#        homeserver/logic-module/hsl3/src_{lbs_id}_{name}/hsl3_{lbs_id}_{name}.py\n"
+        f"#        homeserver/logic-module/hsl3/src_{lbs_id}_{name}/config.json\n"
+        "#\n"
+        "#   2. Run the generator:\n"
+        "#        python3.9 generator3.cpython-39.pyc \\\n"
+        f"#            --source config.json --target {lbs_id}_{name}.hsl\n"
+        "#\n"
+        f"#   3. Drag the produced {lbs_id}_{name}.hsl into this .hslz next\n"
+        "#      to the help pages and style.css. The archive is now\n"
+        "#      import-ready: Experte -> Logikbausteine -> Importieren.\n"
+        "#\n"
+        "# The .py and config.json deliberately do NOT belong inside the\n"
+        "# .hslz per the SDK spec - they are the generator's input, not\n"
+        "# part of the deployable bundle.\n"
     )
 
 
