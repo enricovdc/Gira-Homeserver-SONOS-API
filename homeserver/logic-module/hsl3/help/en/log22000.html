@@ -32,10 +32,10 @@
     <span class="t-chapter">1.</span><span class="t-text">Description</span>
   </h2>
   <div class="descr">
-    Controls one Sonos player over the local network using the players UPnP and SOAP API on port 1400. Provides playback control (play, pause, stop, next, previous), volume and mute, eight configurable radio stations, status outputs (state, volume, mute, title, artist, active station), and live UPnP event push so status outputs update without polling.
+    Controls one Sonos player over the local network using the players UPnP and SOAP API on port 1400. Provides playback control (play, pause, stop, next, previous), volume and mute, eight configurable presets, status outputs (state, volume, mute, title, artist, active station), and live UPnP event push so status outputs update without polling.
   </div>
   <div class="descr">
-    Compatible with current and 2026 Sonos firmware. The radio start path uses empty DIDL-Lite metadata and the x-rincon-mp3radio direct-broadcast scheme, with an automatic fallback if the player rejects the first attempt.
+    Compatible with current and 2026 Sonos firmware. Direct-stream presets use empty DIDL-Lite metadata and the x-rincon-mp3radio direct-broadcast scheme, with an automatic fallback if the player rejects the first attempt.
   </div>
   <div class="alert-box ibox-warn">
     <div class="box-title">Important</div>
@@ -69,15 +69,15 @@
     <tr><td class="io-nr input center">E9</td><td class="io-name">VolDown</td><td class="io-init center">0</td><td class="io-descr">Rising edge decreases volume by VolStep.</td></tr>
     <tr><td class="io-nr input center">E10</td><td class="io-name">SetMute</td><td class="io-init center">0</td><td class="io-descr">0 unmutes, non-zero mutes.</td></tr>
     <tr><td class="io-nr input center">E11</td><td class="io-name">MuteToggle</td><td class="io-init center">0</td><td class="io-descr">Rising edge toggles mute.</td></tr>
-    <tr><td class="io-nr input center">E12</td><td class="io-name">StartRadio</td><td class="io-init center">0</td><td class="io-descr">Alphabetical index 1..N of a station from the Sonos Admin library (or 1..8 of the per-player StationNUri inputs when Admin is absent). The # column in the Admin's Stations table shows each station's current index.</td></tr>
+    <tr><td class="io-nr input center">E12</td><td class="io-name">StartRadio</td><td class="io-init center">0</td><td class="io-descr">Alphabetical index 1..N of a preset from the Sonos Admin library (or 1..8 of the per-player PresetNUri inputs when Admin is absent). The # column in the Admin&apos;s Presets table shows each preset&apos;s current index.</td></tr>
     <tr><td class="io-nr input center">E13</td><td class="io-name">StartRadioName</td><td class="io-init string center"></td><td class="io-descr">Station name (case-insensitive) from the Sonos Admin library. Use this when binding to a Gira visualisation dropdown or text input where the name is more convenient than tracking an index.</td></tr>
     <tr><td class="io-nr input center">E14</td><td class="io-name">Resubscribe</td><td class="io-init center">0</td><td class="io-descr">Rising edge clears UPnP subscriptions and re-subscribes.</td></tr>
-    <tr><td class="io-nr input center">E14</td><td class="io-name">VolStep</td><td class="io-init center">2</td><td class="io-descr">Step size for VolUp and VolDown.</td></tr>
-    <tr><td class="io-nr input center">E15</td><td class="io-name">PollInterval</td><td class="io-init center">60</td><td class="io-descr">Status poll interval in seconds.</td></tr>
-    <tr><td class="io-nr input center">E16</td><td class="io-name">SubTimeout</td><td class="io-init center">1800</td><td class="io-descr">UPnP subscription timeout granted to the player.</td></tr>
-    <tr><td class="io-nr input center">E17</td><td class="io-name">HttpTimeout</td><td class="io-init center">5</td><td class="io-descr">HTTP request timeout in seconds.</td></tr>
-    <tr><td class="io-nr input center">E18</td><td class="io-name">CallbackBase</td><td class="io-init string center"></td><td class="io-descr">Callback base URL for UPnP. Leave empty for auto detection.</td></tr>
-    <tr><td class="io-nr input center">E19..E26</td><td class="io-name">Station1Uri..Station8Uri</td><td class="io-init string center"></td><td class="io-descr">Stream URIs for radio stations 1 to 8.</td></tr>
+    <tr><td class="io-nr input center">E15</td><td class="io-name">VolStep</td><td class="io-init center">2</td><td class="io-descr">Step size for VolUp and VolDown.</td></tr>
+    <tr><td class="io-nr input center">E16</td><td class="io-name">PollInterval</td><td class="io-init center">60</td><td class="io-descr">Status poll interval in seconds.</td></tr>
+    <tr><td class="io-nr input center">E17</td><td class="io-name">SubTimeout</td><td class="io-init center">1800</td><td class="io-descr">UPnP subscription timeout granted to the player.</td></tr>
+    <tr><td class="io-nr input center">E18</td><td class="io-name">HttpTimeout</td><td class="io-init center">5</td><td class="io-descr">HTTP request timeout in seconds.</td></tr>
+    <tr><td class="io-nr input center">E19</td><td class="io-name">CallbackBase</td><td class="io-init string center"></td><td class="io-descr">Callback base URL for UPnP. Leave empty for auto detection.</td></tr>
+    <tr><td class="io-nr input center">E20..E27</td><td class="io-name">Preset1Uri..Preset8Uri</td><td class="io-init string center"></td><td class="io-descr">Stream URIs for preset slots 1 to 8.</td></tr>
   </table>
 </div>
 
@@ -95,7 +95,7 @@
     <tr><td class="io-nr output center">A5</td><td class="io-name">Mute</td><td class="io-init center">0</td><td class="o-sbc center">yes</td><td class="io-descr">Current mute state.</td></tr>
     <tr><td class="io-nr output center">A6</td><td class="io-name">Title</td><td class="io-init string center"></td><td class="o-sbc center">yes</td><td class="io-descr">Current track title or live radio stream content.</td></tr>
     <tr><td class="io-nr output center">A7</td><td class="io-name">Artist</td><td class="io-init string center"></td><td class="o-sbc center">yes</td><td class="io-descr">Current artist if available.</td></tr>
-    <tr><td class="io-nr output center">A8</td><td class="io-name">ActiveStation</td><td class="io-init center">0</td><td class="o-sbc center">yes</td><td class="io-descr">Index of the last radio station started via StartRadio.</td></tr>
+    <tr><td class="io-nr output center">A8</td><td class="io-name">ActiveStation</td><td class="io-init center">0</td><td class="o-sbc center">yes</td><td class="io-descr">Index of the last preset started.</td></tr>
     <tr><td class="io-nr output center">A9</td><td class="io-name">LastError</td><td class="io-init string center"></td><td class="o-sbc center">yes</td><td class="io-descr">Last error code from the player or HTTP layer.</td></tr>
     <tr><td class="io-nr output center">A10</td><td class="io-name">Subscribed</td><td class="io-init center">0</td><td class="o-sbc center">yes</td><td class="io-descr">1 when both UPnP subscriptions are healthy.</td></tr>
   </table>

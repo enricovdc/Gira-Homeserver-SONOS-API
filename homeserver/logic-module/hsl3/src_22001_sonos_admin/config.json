@@ -18,7 +18,7 @@
     "outputs": [
       { "type": "number", "identifier": "ListenPort",          "init_value": 0,  "label": "Admin Listener Port" },
       { "type": "number", "identifier": "PlayerCount",         "init_value": 0,  "label": "Players in Registry" },
-      { "type": "number", "identifier": "StationCount",        "init_value": 0,  "label": "Stations in Registry" },
+      { "type": "number", "identifier": "StationCount",        "init_value": 0,  "label": "Presets in Registry" },
       { "type": "number", "identifier": "CloudAuthorized",     "init_value": 0,  "label": "Cloud OAuth Authorized" },
       { "type": "string", "identifier": "DiscoveredPlayers",   "init_value": "", "label": "Last Scan Result ip;uuid;model per line" },
       { "type": "number", "identifier": "LastDiscoveryCount",  "init_value": 0,  "label": "Last Scan Count" },
@@ -48,7 +48,7 @@
         "translation_outputs": [
           { "label": "Admin Listener Port" },
           { "label": "Player im Register" },
-          { "label": "Sender im Register" },
+          { "label": "Presets im Register" },
           { "label": "Cloud OAuth autorisiert" },
           { "label": "Letztes Suchergebnis ip;uuid;modell pro Zeile" },
           { "label": "Letzte Suche Anzahl" },

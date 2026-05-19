@@ -443,6 +443,39 @@ class TestSonosAdmin(unittest.TestCase):
         self.assertEqual(items[1]["metadata"], "")
         self.assertEqual(items[1]["uri"], "x-rincon-mp3radio://stream.example.com/r1.mp3")
 
+    def test_classify_recognises_x_rincon_stream_as_source(self):
+        """Line-in URIs from a Sonos Connect:Amp / Port / Five / Beam
+        live at x-rincon-stream:<that-player's-UUID>. The classifier
+        must report 'source' so the UI groups them apart from radio."""
+        self.assertEqual(self.mod._classify("", "x-rincon-stream:RINCON_AABBCC"), "source")
+        self.assertEqual(self.mod._classify("object.item.audioItem.audioInput", "anything"), "source")
+
+    def test_api_player_favorites_prepends_line_in_source(self):
+        """The favorites endpoint must inject a synthetic Line-In entry
+        at the top of the list so the integrator can save it as a
+        preset and play it from any other player."""
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        with self.mod._registry_lock:
+            self.mod._players["lr"] = {
+                "id": "lr", "name": "lr", "zoneName": "Living Room",
+                "ip": "10.0.0.50", "mac": "", "uuid": "RINCON_AABBCC",
+                "model": "Connect:Amp", "source": "ssdp",
+            }
+        # Stub the SOAP browse so favourites is empty (offline player ok).
+        original = self.mod.browse_content
+        try:
+            self.mod.browse_content = lambda *a, **kw: []
+            r = lm.api_player_favorites("lr")
+        finally:
+            self.mod.browse_content = original
+        self.assertEqual(len(r["favorites"]), 1)
+        first = r["favorites"][0]
+        self.assertEqual(first["type"], "source")
+        self.assertEqual(first["title"], "Line-In (Living Room)")
+        self.assertEqual(first["uri"], "x-rincon-stream:RINCON_AABBCC")
+
     def test_parse_didl_items_extracts_spotify_playlist_favorite(self):
         """Sonos favorites for Spotify playlists are wrapped in the
         generic sonos-favorite class — the actual playlistContainer
@@ -752,6 +785,92 @@ class TestPlayerStationFromAdmin(unittest.TestCase):
 
     def test_lookup_station_via_admin_returns_none_when_empty(self):
         self.assertIsNone(self.player._lookup_station_via_admin(1))
+
+    def test_normalize_state_strips_zpstr_prefix(self):
+        """Sonos's internal ZPSTR_* states surface as friendly names."""
+        n = self.player._normalize_state
+        self.assertEqual(n("ZPSTR_BUFFERING"), "BUFFERING")
+        self.assertEqual(n("ZPSTR_CONNECTING"), "CONNECTING")
+        self.assertEqual(n("ZPSTR_PLAYING_TV"), "PLAYING_TV")
+        # Standard UPnP states pass through unchanged so existing
+        # integrator wiring keeps working.
+        self.assertEqual(n("PLAYING"), "PLAYING")
+        self.assertEqual(n("PAUSED_PLAYBACK"), "PAUSED_PLAYBACK")
+        self.assertEqual(n("STOPPED"), "STOPPED")
+        self.assertEqual(n("TRANSITIONING"), "TRANSITIONING")
+        self.assertEqual(n(""), "")
+        self.assertEqual(n(None), "")
+
+    def test_is_container_uri_recognises_playlist_schemes(self):
+        """The dispatch from _action_start_radio uses _is_container_uri
+        to decide between direct-play and queue-and-play. Container URIs
+        from Spotify (cpcontainer), Sonos saved queues (jffs), and
+        x-rincon-playlist must route through the queue path."""
+        c = self.player._is_container_uri
+        self.assertTrue(c("x-rincon-cpcontainer:1006206cspotify:playlist:abc"))
+        self.assertTrue(c("file:///jffs/settings/savedqueues.rsq#3"))
+        self.assertTrue(c("x-rincon-playlist:RINCON_xxx#A:PLAYLISTS/foo"))
+        # Direct streams and tracks must NOT match — they keep the
+        # existing direct-play path.
+        self.assertFalse(c("x-sonosapi-stream:s24939?sid=254"))
+        self.assertFalse(c("x-rincon-mp3radio://stream.example.com/r1.mp3"))
+        self.assertFalse(c("x-sonos-spotify:spotify:track:abc"))
+        self.assertFalse(c("http://stream.example.com/r1.mp3"))
+        self.assertFalse(c(""))
+
+    def test_play_via_queue_calls_required_soap_actions(self):
+        """Container playback must issue the queue-and-play SOAP sequence
+        (RemoveAllTracksFromQueue → AddURIToQueue → SetAVTransportURI
+        with the queue URI → Play). Direct SetAVTransportURI on a
+        cpcontainer URI is a no-op on Sonos — that's why playlists
+        didn't play before."""
+        fw = StubFramework()
+        lm = self.player.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._host = "10.0.0.1"
+        lm._uuid = "RINCON_TESTAA"  # short-circuit the UUID resolve
+
+        calls = []
+        def fake_soap(service, action, envelope):
+            calls.append((service, action, envelope))
+            return (True, "", "")
+        lm._soap = fake_soap
+
+        lm._play_via_queue(
+            "x-rincon-cpcontainer:1006206cspotify:playlist:abc",
+            "<DIDL-Lite>...spotify metadata...</DIDL-Lite>",
+            "Test Playlist",
+        )
+        actions = [a for (_s, a, _e) in calls]
+        self.assertEqual(actions, [
+            "RemoveAllTracksFromQueue",
+            "AddURIToQueue",
+            "SetAVTransportURI",
+            "Play",
+        ])
+        # The SetAVTransportURI must point at the player's own queue URI.
+        set_envelope = calls[2][2]
+        self.assertIn("x-rincon-queue:RINCON_TESTAA#0", set_envelope)
+        # The AddURIToQueue payload must carry the cpcontainer URI AND
+        # the music-service metadata (XML-escaped).
+        add_envelope = calls[1][2]
+        self.assertIn("x-rincon-cpcontainer:1006206cspotify:playlist:abc", add_envelope)
+        self.assertIn("spotify metadata", add_envelope)
+
+    def test_play_via_queue_aborts_without_uuid(self):
+        fw = StubFramework()
+        lm = self.player.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._host = "10.0.0.1"
+        lm._uuid = ""
+        # Stub _resolve_uuid to keep returning "" (admin absent + HTTP fails).
+        lm._resolve_uuid = lambda: ""
+        called = []
+        lm._soap = lambda *a, **kw: called.append(a) or (True, "", "")
+        lm._play_via_queue("x-rincon-cpcontainer:foo", "", 1)
+        # No SOAP traffic emitted — we bailed early with PLAYLIST_NO_UUID.
+        self.assertEqual(called, [])
+        self.assertEqual(fw.outputs["LastError"], b"PLAYLIST_NO_UUID")
 
     def test_xml_escape_handles_uri_with_ampersand(self):
         """SetAVTransportURI URIs frequently contain & (cloud query params).

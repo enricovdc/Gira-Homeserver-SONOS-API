@@ -5,7 +5,8 @@ on port 8080 and serves a single-page web UI for managing the Sonos
 integration:
 
   - Discovered + manually-added players (identified by IP and/or MAC).
-  - A library of radio stations (name + stream URI).
+  - A library of playable presets (radio stations, favorites,
+    playlists, Sonos saved queues, and line-in sources).
   - Sonos Cloud Control API OAuth credentials and token capture.
 
 It runs both periodic and KNX-triggerable SSDP discovery, exposes the
@@ -501,6 +502,8 @@ def _classify(upnp_class, uri):
     present) and falls back to URI-scheme heuristics for items where the
     class is just the generic sonos-favorite wrapper."""
     c = (upnp_class or "").lower()
+    if "audioinput" in c:
+        return "source"
     if "audiobroadcast" in c:
         return "radio"
     if "playlistcontainer" in c:
@@ -510,6 +513,9 @@ def _classify(upnp_class, uri):
     if "musictrack" in c:
         return "track"
     # URI-scheme fallbacks for sonos-favorite wrappers with no inner class.
+    if uri.startswith("x-rincon-stream"):
+        # Another player's line-in (Connect:Amp, Port, Five, Beam…).
+        return "source"
     if uri.startswith("x-rincon-mp3radio") or uri.startswith("x-sonosapi-stream"):
         return "radio"
     if uri.startswith("x-rincon-cpcontainer"):
@@ -726,13 +732,16 @@ code { background: #f5f5f5; padding: 1px 6px; border: 1px solid #e8e8e8;
   </section>
 
   <section>
-    <h2>Radio stations</h2>
+    <h2>Presets</h2>
     <p class="muted">
-      Wire one of the Sonos Player block's two station-trigger inputs:
+      Presets are anything playable — radio stations, Sonos favorites,
+      Spotify / Apple Music playlists, Sonos saved queues, and line-in
+      sources from a Connect:Amp / Port / Five.
+      Wire one of the Sonos Player block's two preset-trigger inputs:
       write the <strong>#</strong> shown below into <code>StartRadio</code>
       (numeric), or write the <strong>Name</strong> into
       <code>StartRadioName</code> (string, case-insensitive).
-      Adding or removing stations re-numbers the index list alphabetically.
+      Adding or removing presets re-numbers the index list alphabetically.
     </p>
     <table id="stations">
       <thead><tr>
@@ -746,7 +755,7 @@ code { background: #f5f5f5; padding: 1px 6px; border: 1px solid #e8e8e8;
     <div class="row">
       <input id="ns-name" placeholder="name" style="max-width: 200px">
       <input id="ns-uri"  placeholder="stream URL: http://... or x-rincon-mp3radio://...">
-      <button id="ns-add">Add station</button>
+      <button id="ns-add">Add preset</button>
     </div>
   </section>
 
@@ -878,7 +887,7 @@ async function refreshStations() {
   });
   if (!sorted.length) {
     tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#808080;padding:12px">' +
-      'No stations yet. Add one above, or click <strong>Favorites</strong> on a player to import.' +
+      'No presets yet. Add one above, or click <strong>Favorites</strong> on a player to import.' +
       '</td></tr>';
   }
 }
@@ -895,7 +904,7 @@ async function refreshDiag() {
   document.getElementById('diag').innerHTML =
     'Listener port: <code>' + r.listenPort + '</code> &middot; ' +
     'Players: <code>' + r.playerCount + '</code> &middot; ' +
-    'Stations: <code>' + r.stationCount + '</code> &middot; ' +
+    'Presets: <code>' + r.stationCount + '</code> &middot; ' +
     'Cloud authorized: <code>' + r.cloudAuthorized + '</code>';
 }
 async function refreshAll() {
@@ -1007,7 +1016,7 @@ async function toggleFavorites(pid, btn) {
       html += '<div class="fav-row">' +
                 '<span class="fav-type">' + esc(f.type || 'other') + '</span>' +
                 '<span class="fav-title">' + esc(f.title) + '</span>' +
-                '<button class="small" data-add-fav-station="' + payload + '">Add to stations</button>' +
+                '<button class="small" data-add-fav-station="' + payload + '">Add as preset</button>' +
               '</div>';
     }
   }
@@ -1087,7 +1096,7 @@ def _tile_fragment(base_url):
         '<a id="config_sonos_admin" class="box" href="{url}" target="_blank">\n'
         '  <img class="box_img" src="{url}/icon.svg" />\n'
         '  <div class="title">Sonos Admin</div>\n'
-        '  <div class="descr">Manage Sonos players, radio stations, and Cloud authorization.</div>\n'
+        '  <div class="descr">Manage Sonos players, presets, and Cloud authorization.</div>\n'
         '  <div class="url">{url}</div>\n'
         '  <div class="link">&gt; call-up</div>\n'
         '</a>\n'
@@ -1333,7 +1342,7 @@ class LogicModule:
         self.debug = self.fw.create_debug_section()
         self.debug.set("Listener port", 0)
         self.debug.set("Players", 0)
-        self.debug.set("Stations", 0)
+        self.debug.set("Presets", 0)
         self.debug.set("Cloud authorized", "no")
         self.debug.set("Last discovery", "-")
 
@@ -1441,7 +1450,7 @@ class LogicModule:
         self.fw.set_output("CloudAuthorized", 1 if authed else 0)
         if self.debug is not None:
             self.debug.set("Players", float(np))
-            self.debug.set("Stations", float(ns))
+            self.debug.set("Presets", float(ns))
             self.debug.set("Cloud authorized", "yes" if authed else "no")
 
     def _publish_counters_async(self):
@@ -1591,7 +1600,14 @@ class LogicModule:
     def api_player_favorites(self, pid):
         """Return the player's Sonos Favorites (the FV:2 container in
         UPnP ContentDirectory). Each item carries the playback URI and
-        the music-service metadata required for cloud favorites."""
+        the music-service metadata required for cloud favorites.
+
+        Synthetic entry on top: the player's own line-in source. Every
+        Sonos Connect:Amp, Port, Five, Beam, Arc (and a few others)
+        exposes its analogue input as ``x-rincon-stream:<that-player's-UUID>``.
+        Other players can consume the source by setting that URI. Saving
+        it as a preset lets the integrator pipe "Living Room Connect:Amp
+        line-in" into "Kitchen" with one trigger."""
         with _registry_lock:
             rec = _players.get(pid)
         if rec is None:
@@ -1600,6 +1616,17 @@ class LogicModule:
         if not ip:
             raise ValueError("player has no IP — run discovery first")
         items = browse_content(ip, "FV:2", count=200)
+        # Prepend the line-in source so it appears at the top of the
+        # Favorites pane in the Admin UI.
+        if rec.get("uuid"):
+            zone = rec.get("zoneName") or rec.get("name") or rec.get("ip") or "Player"
+            items.insert(0, {
+                "title": "Line-In ({})".format(zone),
+                "class": "object.item.audioItem.audioInput",
+                "uri": "x-rincon-stream:{}".format(rec["uuid"]),
+                "metadata": "",
+                "type": "source",
+            })
         return {"ok": True, "playerId": pid, "favorites": items}
 
     def api_player_playlists(self, pid):

@@ -104,6 +104,59 @@ ENV_SET_URI = (
     "</s:Body></s:Envelope>"
 )
 
+# Queue management — needed to play containers (Spotify / Apple Music
+# playlists, Sonos saved queues). For these, SetAVTransportURI with the
+# raw container URI is NOT a valid transport target; Sonos requires:
+#   RemoveAllTracksFromQueue → AddURIToQueue → SetAVTransportURI(queue) → Play
+ENV_REMOVE_QUEUE = (
+    '<?xml version="1.0" encoding="utf-8"?>'
+    '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">'
+    '<s:Body><u:RemoveAllTracksFromQueue xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
+    "<InstanceID>0</InstanceID></u:RemoveAllTracksFromQueue></s:Body></s:Envelope>"
+)
+ENV_ADD_URI = (
+    '<?xml version="1.0" encoding="utf-8"?>'
+    '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">'
+    '<s:Body><u:AddURIToQueue xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
+    "<InstanceID>0</InstanceID>"
+    "<EnqueuedURI>{uri}</EnqueuedURI>"
+    "<EnqueuedURIMetaData>{meta}</EnqueuedURIMetaData>"
+    "<DesiredFirstTrackNumberEnqueued>0</DesiredFirstTrackNumberEnqueued>"
+    "<EnqueueAsNext>0</EnqueueAsNext>"
+    "</u:AddURIToQueue></s:Body></s:Envelope>"
+)
+
+
+# Container URI schemes that require queue-and-play (not direct
+# SetAVTransportURI). Anything not matching these is treated as a direct
+# stream / single-track URI and gets the existing direct-play path.
+CONTAINER_URI_PREFIXES = (
+    "x-rincon-cpcontainer:",   # Spotify / Apple Music / Amazon playlists & albums
+    "file:///jffs/settings/savedqueues.rsq",  # Sonos saved queues (SQ:N)
+    "x-rincon-playlist:",      # Internal Sonos playlists
+)
+
+
+def _is_container_uri(uri):
+    if not uri:
+        return False
+    return any(uri.startswith(p) for p in CONTAINER_URI_PREFIXES)
+
+
+# Sonos extends the standard UPnP transport-state alphabet with a
+# ZPSTR_-prefixed family (BUFFERING, CONNECTING, PLAYING_TV, …). The
+# prefix is internal terminology; we strip it so the State output shows
+# user-friendly values. Standard states (PLAYING, PAUSED_PLAYBACK,
+# STOPPED, TRANSITIONING, NO_MEDIA_PRESENT) pass through unchanged so
+# any existing integrator wiring keeps working.
+def _normalize_state(raw):
+    if not raw:
+        return ""
+    s = str(raw).strip()
+    if s.startswith("ZPSTR_"):
+        return s[len("ZPSTR_"):]
+    return s
+
 
 def _xml_escape(s):
     """Escape a string for inclusion as XML element content. The URI and
@@ -426,6 +479,7 @@ class LogicModule:
         self._last_title = ""
         self._last_artist = ""
         self._last_zone_name = ""
+        self._uuid = ""           # Sonos RINCON UUID — needed to build queue URI
         self._active_station = 0
         self._online = False
         self._stations = {}  # idx -> uri
@@ -561,7 +615,7 @@ class LogicModule:
             self.debug.inc("Notifies received")
         self._online = True
         if "state" in parsed:
-            self._last_state = parsed["state"]
+            self._last_state = _normalize_state(parsed["state"])
         if "volume" in parsed:
             self._last_volume = parsed["volume"]
         if "mute" in parsed:
@@ -718,6 +772,56 @@ class LogicModule:
         current = extract_response_field(body, "CurrentMute") == "1"
         self._action_set_mute(not current)
 
+    def _play_via_queue(self, uri, metadata, spec):
+        """Queue-and-play path for container URIs (playlist / album /
+        Sonos saved queue). The standard Sonos sequence is:
+
+            RemoveAllTracksFromQueue       (start with an empty queue)
+            AddURIToQueue(uri, metadata)   (load the container)
+            SetAVTransportURI(queue_uri)   (switch transport to queue)
+            Play
+
+        queue_uri is "x-rincon-queue:<this-player's-UUID>#0" — Sonos
+        won't accept a relative form, so we need the player's UUID.
+        Cached in self._uuid (fetched from Admin or device XML)."""
+        uuid = self._resolve_uuid()
+        if not uuid:
+            self.fw.run_in_context(self._write_error, ("PLAYLIST_NO_UUID",))
+            return
+
+        # Step 1: clear the existing queue. Best-effort — some Sonos
+        # firmware variants return an empty 200 even on a previously
+        # empty queue, so we don't treat a 'fault' here as fatal.
+        self._soap("AVTransport", "RemoveAllTracksFromQueue", ENV_REMOVE_QUEUE)
+
+        # Step 2: enqueue the container with its metadata. For
+        # cloud-service containers (cpcontainer) the metadata carries the
+        # music-service binding — without it Sonos can't resolve the URI.
+        env_add = ENV_ADD_URI \
+            .replace("{uri}", _xml_escape(uri)) \
+            .replace("{meta}", _xml_escape(metadata))
+        ok, _b, err = self._soap("AVTransport", "AddURIToQueue", env_add)
+        if not ok:
+            self.fw.run_in_context(self._write_error, (err or "ADD_QUEUE_FAILED",))
+            return
+
+        # Step 3: switch transport to the player's queue.
+        queue_uri = "x-rincon-queue:{}#0".format(uuid)
+        env_switch = ENV_SET_URI \
+            .replace("{uri}", _xml_escape(queue_uri)) \
+            .replace("{meta}", "")
+        ok, _b, err = self._soap("AVTransport", "SetAVTransportURI", env_switch)
+        if not ok:
+            self.fw.run_in_context(self._write_error, (err or "QUEUE_TRANSPORT_FAILED",))
+            return
+
+        # Step 4: play.
+        ok, _b, err = self._soap("AVTransport", "Play", ENV_PLAY)
+        if not ok:
+            self.fw.run_in_context(self._write_error, (err or "PLAY_FAILED",))
+            return
+        self.fw.run_in_context(self._mark_active_station, (spec,))
+
     def _action_start_radio(self, spec):
         """Start a station identified either by a positive integer
         (alphabetical index into the Admin station library, or 1..8
@@ -745,6 +849,14 @@ class LogicModule:
             spec_label = spec
         if not uri:
             self.fw.run_in_context(self._write_error, ("STATION_NOT_FOUND: {}".format(spec_label),))
+            return
+
+        # Containers (Spotify/Apple playlists, Sonos saved queues, …)
+        # cannot be SetAVTransportURI'd directly — they must be added to
+        # the player's queue first, then the transport switches to the
+        # queue URI. Branch here.
+        if _is_container_uri(uri):
+            self._play_via_queue(uri, metadata, spec)
             return
 
         if metadata:
@@ -783,17 +895,10 @@ class LogicModule:
 
     # ----- Periodic tick ----------------------------------------------------
 
-    def _fetch_zone_name(self):
-        """Return the player's Sonos Zone Name ("Living Room"). Tries the
-        Admin registry first (cheap, no HTTP); falls back to a one-shot
-        GET against the player's UPnP device description. Returns '' on
-        all errors so an offline player just blanks the output. Runs in
-        a worker thread — never call from node context (does HTTP)."""
-        # Admin registry route (instant).
-        rec = _admin_player_record(self._host_spec) or _admin_player_record(self._host)
-        if rec and rec.get("zoneName"):
-            return rec["zoneName"]
-        # Direct fetch.
+    def _fetch_device_xml(self):
+        """One-shot GET of the player's UPnP device description. Cached
+        only at the call site (callers cache the parsed result). Runs in
+        a worker thread — never call from node context."""
         if not self._host:
             return ""
         try:
@@ -801,10 +906,39 @@ class LogicModule:
                 "http://{}:1400/xml/device_description.xml".format(self._host),
                 timeout=self._http_timeout_s,
             )
+            return resp.text
         except Exception:
             return ""
-        m = re.search(r"<roomName>([^<]+)</roomName>", resp.text)
+
+    def _fetch_zone_name(self):
+        """Return the player's Sonos Zone Name ("Living Room"). Tries the
+        Admin registry first (cheap, no HTTP); falls back to fetching
+        device_description.xml when Admin isn't present. Returns '' on
+        all errors so an offline player just blanks the output."""
+        rec = _admin_player_record(self._host_spec) or _admin_player_record(self._host)
+        if rec and rec.get("zoneName"):
+            return rec["zoneName"]
+        xml = self._fetch_device_xml()
+        m = re.search(r"<roomName>([^<]+)</roomName>", xml) if xml else None
         return m.group(1) if m else ""
+
+    def _resolve_uuid(self):
+        """Return the player's RINCON UUID — required when building the
+        queue URI for playlist playback. Admin registry first (cheap),
+        falls back to <UDN>uuid:RINCON_xxx</UDN> from the device XML.
+        Caches in self._uuid so subsequent calls are free."""
+        if self._uuid:
+            return self._uuid
+        rec = _admin_player_record(self._host_spec) or _admin_player_record(self._host)
+        if rec and rec.get("uuid"):
+            self._uuid = rec["uuid"]
+            return self._uuid
+        xml = self._fetch_device_xml()
+        if xml:
+            m = re.search(r"<UDN>uuid:([A-Za-z0-9_-]+)</UDN>", xml)
+            if m:
+                self._uuid = m.group(1)
+        return self._uuid
 
     def _tick_work(self):
         # Re-resolve the host on each tick so DHCP renumbering is picked up
@@ -953,7 +1087,7 @@ class LogicModule:
             self.debug.timestamp("Last poll")
         self._online = online
         if state:
-            self._last_state = state
+            self._last_state = _normalize_state(state)
         if volume is not None:
             self._last_volume = volume
         if mute is not None:
@@ -966,8 +1100,8 @@ class LogicModule:
         self._publish_sub_state()
 
     def _mark_state(self, state):
-        self._last_state = state
-        self.fw.set_output("State", to_iso_bytes(state))
+        self._last_state = _normalize_state(state)
+        self.fw.set_output("State", to_iso_bytes(self._last_state))
 
     def _mark_volume(self, level):
         self._last_volume = level

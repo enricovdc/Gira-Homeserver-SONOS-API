@@ -29,10 +29,10 @@
 <div class="topic">
   <h2 class="t-line"><a id="auto_index_anchor_1_"></a><span class="t-chapter">1.</span><span class="t-text">Beschreibung</span></h2>
   <div class="descr">
-    Steuert einen einzelnen Sonos Player ueber das lokale Netzwerk mittels der UPnP und SOAP API auf Port 1400. Bietet Wiedergabesteuerung (Play, Pause, Stop, Naechster, Vorheriger), Lautstaerke und Stummschaltung, acht konfigurierbare Radiosender, Statusausgaenge (Zustand, Lautstaerke, Stumm, Titel, Interpret, aktiver Sender) und Live UPnP Event Push so dass Statusausgaben ohne Polling aktualisiert werden.
+    Steuert einen einzelnen Sonos Player ueber das lokale Netzwerk mittels der UPnP und SOAP API auf Port 1400. Bietet Wiedergabesteuerung (Play, Pause, Stop, Naechster, Vorheriger), Lautstaerke und Stummschaltung, acht konfigurierbare Presets, Statusausgaenge (Zustand, Lautstaerke, Stumm, Titel, Interpret, aktiver Preset) und Live UPnP Event Push so dass Statusausgaben ohne Polling aktualisiert werden.
   </div>
   <div class="descr">
-    Kompatibel mit aktueller und 2026er Sonos Firmware. Der Radiosenderstart verwendet leere DIDL-Lite Metadaten und das x-rincon-mp3radio Direkt-Broadcast-Schema mit automatischem Fallback bei Ablehnung.
+    Kompatibel mit aktueller und 2026er Sonos Firmware. Der Preset-Start verwendet leere DIDL-Lite Metadaten und das x-rincon-mp3radio Direkt-Broadcast-Schema mit automatischem Fallback bei Ablehnung.
   </div>
   <div class="alert-box ibox-warn">
     <div class="box-title">Wichtig</div>
@@ -63,15 +63,15 @@
     <tr><td class="io-nr input center">E9</td><td class="io-name">VolDown</td><td class="io-init center">0</td><td class="io-descr">Leiser um VolStep.</td></tr>
     <tr><td class="io-nr input center">E10</td><td class="io-name">SetMute</td><td class="io-init center">0</td><td class="io-descr">0 unmute, nicht 0 mute.</td></tr>
     <tr><td class="io-nr input center">E11</td><td class="io-name">MuteToggle</td><td class="io-init center">0</td><td class="io-descr">Schaltet Stummschaltung um.</td></tr>
-    <tr><td class="io-nr input center">E12</td><td class="io-name">StartRadio</td><td class="io-init center">0</td><td class="io-descr">Alphabetischer Index 1..N eines Senders aus der Sonos Admin Bibliothek. Die Spalte # in der Admin-UI zeigt den aktuellen Index.</td></tr>
-    <tr><td class="io-nr input center">E13</td><td class="io-name">StartRadioName</td><td class="io-init string center"></td><td class="io-descr">Sendername (Gross-Klein-egal) aus der Sonos Admin Bibliothek. Praktisch fuer Bindung an Gira Visualisierungs-Auswahl oder Textfeld.</td></tr>
+    <tr><td class="io-nr input center">E12</td><td class="io-name">StartRadio</td><td class="io-init center">0</td><td class="io-descr">Alphabetischer Index 1..N eines Presets aus der Sonos Admin Preset-Bibliothek. Die Spalte # in der Admin-UI zeigt den aktuellen Index.</td></tr>
+    <tr><td class="io-nr input center">E13</td><td class="io-name">StartRadioName</td><td class="io-init string center"></td><td class="io-descr">Preset-Name (Gross-Klein-egal) aus der Sonos Admin Bibliothek. Praktisch fuer Bindung an Gira Visualisierungs-Auswahl oder Textfeld.</td></tr>
     <tr><td class="io-nr input center">E14</td><td class="io-name">Resubscribe</td><td class="io-init center">0</td><td class="io-descr">Erneuert die UPnP Abonnements.</td></tr>
-    <tr><td class="io-nr input center">E14</td><td class="io-name">VolStep</td><td class="io-init center">2</td><td class="io-descr">Schrittweite fuer VolUp und VolDown.</td></tr>
-    <tr><td class="io-nr input center">E15</td><td class="io-name">PollInterval</td><td class="io-init center">60</td><td class="io-descr">Status-Abfrageintervall in Sekunden.</td></tr>
-    <tr><td class="io-nr input center">E16</td><td class="io-name">SubTimeout</td><td class="io-init center">1800</td><td class="io-descr">UPnP Abonnement Timeout.</td></tr>
-    <tr><td class="io-nr input center">E17</td><td class="io-name">HttpTimeout</td><td class="io-init center">5</td><td class="io-descr">HTTP Anfrage Timeout in Sekunden.</td></tr>
-    <tr><td class="io-nr input center">E18</td><td class="io-name">CallbackBase</td><td class="io-init string center"></td><td class="io-descr">Callback Basis URL. Leer fuer automatische Erkennung.</td></tr>
-    <tr><td class="io-nr input center">E19..E26</td><td class="io-name">Station1Uri..Station8Uri</td><td class="io-init string center"></td><td class="io-descr">Stream URIs fuer Radiosender 1 bis 8.</td></tr>
+    <tr><td class="io-nr input center">E15</td><td class="io-name">VolStep</td><td class="io-init center">2</td><td class="io-descr">Schrittweite fuer VolUp und VolDown.</td></tr>
+    <tr><td class="io-nr input center">E16</td><td class="io-name">PollInterval</td><td class="io-init center">60</td><td class="io-descr">Status-Abfrageintervall in Sekunden.</td></tr>
+    <tr><td class="io-nr input center">E17</td><td class="io-name">SubTimeout</td><td class="io-init center">1800</td><td class="io-descr">UPnP Abonnement Timeout.</td></tr>
+    <tr><td class="io-nr input center">E18</td><td class="io-name">HttpTimeout</td><td class="io-init center">5</td><td class="io-descr">HTTP Anfrage Timeout in Sekunden.</td></tr>
+    <tr><td class="io-nr input center">E19</td><td class="io-name">CallbackBase</td><td class="io-init string center"></td><td class="io-descr">Callback Basis URL. Leer fuer automatische Erkennung.</td></tr>
+    <tr><td class="io-nr input center">E20..E27</td><td class="io-name">Preset1Uri..Preset8Uri</td><td class="io-init string center"></td><td class="io-descr">Stream URIs fuer Preset-Plaetze 1 bis 8.</td></tr>
   </table>
 </div>
 
@@ -86,7 +86,7 @@
     <tr><td class="io-nr output center">A5</td><td class="io-name">Mute</td><td class="io-init center">0</td><td class="o-sbc center">ja</td><td class="io-descr">Stummschaltung.</td></tr>
     <tr><td class="io-nr output center">A6</td><td class="io-name">Title</td><td class="io-init string center"></td><td class="o-sbc center">ja</td><td class="io-descr">Titel oder Stream-Inhalt.</td></tr>
     <tr><td class="io-nr output center">A7</td><td class="io-name">Artist</td><td class="io-init string center"></td><td class="o-sbc center">ja</td><td class="io-descr">Interpret.</td></tr>
-    <tr><td class="io-nr output center">A8</td><td class="io-name">ActiveStation</td><td class="io-init center">0</td><td class="o-sbc center">ja</td><td class="io-descr">Aktive Radiosender-Nummer.</td></tr>
+    <tr><td class="io-nr output center">A8</td><td class="io-name">ActiveStation</td><td class="io-init center">0</td><td class="o-sbc center">ja</td><td class="io-descr">Index des zuletzt gestarteten Presets.</td></tr>
     <tr><td class="io-nr output center">A9</td><td class="io-name">LastError</td><td class="io-init string center"></td><td class="o-sbc center">ja</td><td class="io-descr">Letzter Fehlercode.</td></tr>
     <tr><td class="io-nr output center">A10</td><td class="io-name">Subscribed</td><td class="io-init center">0</td><td class="o-sbc center">ja</td><td class="io-descr">1 wenn beide UPnP Abonnements aktiv sind.</td></tr>
   </table>
