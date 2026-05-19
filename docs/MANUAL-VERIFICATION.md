@@ -2,7 +2,7 @@
 
 Run through this list against real Sonos hardware when commissioning
 the HSL3 modules, after a Sonos firmware update, or after network
-changes. The 96 unit tests under `tests/test_logic_modules.py` cover
+changes. The 108 unit tests under `tests/test_logic_modules.py` cover
 the pure logic against a stubbed framework; this checklist is for
 hardware-in-the-loop validation.
 
@@ -104,6 +104,29 @@ Trigger the corresponding KNX address (or simulate the input in Experte):
       The master keeps playing.
 - [ ] Form a group with an unknown player id (edit the Admin record
       out-of-band, then trigger the preset) → `LastError = GROUP_PARTIAL: <n>`.
+
+## Sound Enhancement companion (LBS 22002)
+
+Optional per-player block. Skip this section if you didn't drop an
+LBS 22002 onto the canvas.
+
+- [ ] On a Player block's matching LBS 22002, `Online` is 1 within
+      ~60 s of download. Same Host value as the LBS 22000 — UUID
+      preferred.
+- [ ] Write -5 to `SetBass`. Bass output reads -5 within one Tick.
+      The Sonos app's EQ panel shows -5 too.
+- [ ] Write 11 to `SetBass`. The block clamps to 10 and dispatches
+      that. `Bass` output reads 10.
+- [ ] Write 1 to `SetTreble`, 1 to `SetLoudness`, 1 to `SetCrossfade`.
+      Each output mirrors. Sonos app reflects the changes.
+- [ ] On a non-soundbar speaker (Move / One / Five / Connect:Amp):
+      write 1 to `SetNightMode`. `LastError` reads
+      `NIGHTMODE_UNSUPPORTED`. `NightMode` output stays at 0.
+- [ ] On a Beam / Arc / Playbar: write 1 to `SetNightMode` /
+      `SetDialogMode`. Outputs mirror.
+- [ ] Write 5 to `SetSleepTimer` (5 min). `SleepTimerRemaining`
+      output starts ~300 and counts down on each Tick.
+- [ ] Write 0 to `SetSleepTimer`. `SleepTimerRemaining` drops to 0.
 
 ## Sounds / announcements
 

@@ -1,0 +1,104 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN">
+<html>
+<head>
+<link rel="stylesheet" href="../style.css">
+<title>Logic - Sonos Sound Enhancement</title>
+<style>body { background: none; }</style>
+<meta http-equiv="Content-Type" content="text/html;charset=utf-8">
+</head>
+<body>
+<div class="top-title">Sonos Sound Enhancement</div>
+<div class="nav">
+  <a href="javascript:history.back()">Previous</a> /
+  <a href="javascript:history.forward()">Next</a> |
+  <a href="hlpsearch.html">Search</a> |
+  <a href="index.html">Help</a> /
+  <a href="logic.html">Logic</a> / Sonos Sound Enhancement
+</div>
+
+<div class="index">
+  <div class="index-title"><a id="doc_index_1_"></a>Contents</div>
+  <div class="t-line"><div class="t-chapter"><a href="#auto_index_anchor_1_">1.</a></div><div class="t-text"><a href="#auto_index_anchor_1_">Description</a></div></div>
+  <div class="t-line"><div class="t-chapter"><a href="#auto_index_anchor_2_">2.</a></div><div class="t-text"><a href="#auto_index_anchor_2_">Inputs</a></div></div>
+  <div class="t-line"><div class="t-chapter"><a href="#auto_index_anchor_3_">3.</a></div><div class="t-text"><a href="#auto_index_anchor_3_">Outputs</a></div></div>
+  <div class="t-line"><div class="t-chapter"><a href="#auto_index_anchor_4_">4.</a></div><div class="t-text"><a href="#auto_index_anchor_4_">Other</a></div></div>
+</div>
+
+<div class="content">
+
+<div class="topic">
+  <h2 class="t-line">
+    <a id="auto_index_anchor_1_"></a>
+    <span class="t-chapter">1.</span><span class="t-text">Description</span>
+  </h2>
+  <div class="descr">
+    Optional per-player companion to LBS 22000 Sonos Player. Carries the sound-tuning controls that aren&apos;t needed on every Sonos block: bass / treble, loudness, soundbar EQ (Night Mode + Dialog Mode), crossfade, and the sleep timer. Drop one instance onto the canvas for any speaker that needs the extras.
+  </div>
+  <div class="descr">
+    The Player block (LBS 22000) keeps all primary playback control. This block is purely additive — leave it off for kitchens / bedrooms that just want play / pause / volume from KNX.
+  </div>
+  <div class="alert-box ibox-hint">
+    <div class="box-title">Note</div>
+    <div class="box-text"><div class="descr">
+      Polling-only, no UPnP subscriptions. These settings change rarely, so refreshing on the same Tick cadence as the Player (default 60 s) is enough. Soundbar EQ controls (Night Mode, Dialog Mode) fail gracefully on non-soundbar hardware with NIGHTMODE_UNSUPPORTED / DIALOGMODE_UNSUPPORTED on LastError.
+    </div></div>
+  </div>
+</div>
+
+<div class="topic">
+  <h2 class="t-line">
+    <a id="auto_index_anchor_2_"></a>
+    <span class="t-chapter">2.</span><span class="t-text">Inputs</span>
+  </h2>
+  <table class="table-in">
+    <tr><td class="io-nr center">E#</td><td class="io-name">Name</td><td class="io-init center">Init</td><td class="io-descr">Description</td></tr>
+    <tr><td class="io-nr input center">E1</td><td class="io-name">Host</td><td class="io-init string center"></td><td class="io-descr">Player identifier. Same value used on the matching LBS 22000 (UUID preferred). The Admin LBS resolves UUID / MAC / name / IP to the current player IP.</td></tr>
+    <tr><td class="io-nr input center">E2</td><td class="io-name">SetBass</td><td class="io-init center">0</td><td class="io-descr">Bass adjustment -10 to +10. Clamped to range; values outside are silently saturated. Confirms via Bass output after a successful SOAP call.</td></tr>
+    <tr><td class="io-nr input center">E3</td><td class="io-name">SetTreble</td><td class="io-init center">0</td><td class="io-descr">Treble adjustment -10 to +10. Same clamping as SetBass.</td></tr>
+    <tr><td class="io-nr input center">E4</td><td class="io-name">SetLoudness</td><td class="io-init center">0</td><td class="io-descr">Loudness contour. 0 = off, non-zero = on. Particularly useful at low listening volumes where Sonos&apos;s low-end falls off otherwise.</td></tr>
+    <tr><td class="io-nr input center">E5</td><td class="io-name">SetNightMode</td><td class="io-init center">0</td><td class="io-descr">Soundbar Night Mode (loudness compression for late-night TV). Works only on Beam / Arc / Playbar. Non-soundbar players write NIGHTMODE_UNSUPPORTED to LastError.</td></tr>
+    <tr><td class="io-nr input center">E6</td><td class="io-name">SetDialogMode</td><td class="io-init center">0</td><td class="io-descr">Soundbar Dialog Mode / Speech Enhance. Same constraint as SetNightMode; non-soundbar players write DIALOGMODE_UNSUPPORTED.</td></tr>
+    <tr><td class="io-nr input center">E7</td><td class="io-name">SetCrossfade</td><td class="io-init center">0</td><td class="io-descr">Crossfade between tracks in a queue. 0/1. Only meaningful while the player is playing from a queue / playlist (radio streams ignore it).</td></tr>
+    <tr><td class="io-nr input center">E8</td><td class="io-name">SetSleepTimer</td><td class="io-init center">0</td><td class="io-descr">Sleep timer in minutes (0 cancels). Sonos stops playback when the timer reaches zero. SleepTimerRemaining output reflects the countdown.</td></tr>
+    <tr><td class="io-nr input center">E9</td><td class="io-name">PollInterval</td><td class="io-init center">0</td><td class="io-descr">Status poll interval in seconds. Leave at 0 to use the Admin web UI&apos;s Player Defaults value (default 60 s).</td></tr>
+    <tr><td class="io-nr input center">E10</td><td class="io-name">HttpTimeout</td><td class="io-init center">0</td><td class="io-descr">HTTP request timeout in seconds. Leave at 0 to use the Admin web UI&apos;s Player Defaults value (default 5 s).</td></tr>
+  </table>
+</div>
+
+<div class="topic">
+  <h2 class="t-line">
+    <a id="auto_index_anchor_3_"></a>
+    <span class="t-chapter">3.</span><span class="t-text">Outputs</span>
+  </h2>
+  <table class="table-out">
+    <tr><td class="io-nr center">A#</td><td class="io-name">Name</td><td class="io-init center">Init</td><td class="o-sbc center">SBC</td><td class="io-descr">Description</td></tr>
+    <tr><td class="io-nr output center">A1</td><td class="io-name">Online</td><td class="io-init center">0</td><td class="o-sbc center">yes</td><td class="io-descr">1 when at least one SOAP call in the latest Tick succeeded. 0 when the player is unreachable.</td></tr>
+    <tr><td class="io-nr output center">A2</td><td class="io-name">Bass</td><td class="io-init center">0</td><td class="o-sbc center">yes</td><td class="io-descr">Current bass setting -10 to +10. Updates on every Tick + after a successful SetBass.</td></tr>
+    <tr><td class="io-nr output center">A3</td><td class="io-name">Treble</td><td class="io-init center">0</td><td class="o-sbc center">yes</td><td class="io-descr">Current treble setting -10 to +10.</td></tr>
+    <tr><td class="io-nr output center">A4</td><td class="io-name">Loudness</td><td class="io-init center">0</td><td class="o-sbc center">yes</td><td class="io-descr">1 = loudness on.</td></tr>
+    <tr><td class="io-nr output center">A5</td><td class="io-name">NightMode</td><td class="io-init center">0</td><td class="o-sbc center">yes</td><td class="io-descr">1 = soundbar Night Mode on. Stays at 0 on non-soundbar hardware.</td></tr>
+    <tr><td class="io-nr output center">A6</td><td class="io-name">DialogMode</td><td class="io-init center">0</td><td class="o-sbc center">yes</td><td class="io-descr">1 = soundbar Dialog Mode on.</td></tr>
+    <tr><td class="io-nr output center">A7</td><td class="io-name">Crossfade</td><td class="io-init center">0</td><td class="o-sbc center">yes</td><td class="io-descr">1 = crossfade between queue tracks enabled.</td></tr>
+    <tr><td class="io-nr output center">A8</td><td class="io-name">SleepTimerRemaining</td><td class="io-init center">0</td><td class="o-sbc center">yes</td><td class="io-descr">Remaining sleep-timer time in seconds. 0 = no timer active. Counted down by the Tick poll.</td></tr>
+    <tr><td class="io-nr output center">A9</td><td class="io-name">LastError</td><td class="io-init string center"></td><td class="o-sbc center">yes</td><td class="io-descr">Last error code (UNREACHABLE, HTTP_&lt;n&gt;, SET_BASS_FAILED, NIGHTMODE_UNSUPPORTED, DIALOGMODE_UNSUPPORTED, EXCEPTION: …). Empty when healthy.</td></tr>
+  </table>
+</div>
+
+<div class="topic">
+  <h2 class="t-line">
+    <a id="auto_index_anchor_4_"></a>
+    <span class="t-chapter">4.</span><span class="t-text">Other</span>
+  </h2>
+  <table class="table-logic-info">
+    <tr><td>LBS</td><td>22002</td></tr>
+    <tr><td>Version</td><td>1.0.0</td></tr>
+    <tr><td>Firmware</td><td>HSL3, HS 4.13 or newer</td></tr>
+    <tr><td>External libraries</td><td>requests (bundled)</td></tr>
+    <tr><td>Network</td><td>TCP 1400 outbound to player</td></tr>
+    <tr><td>Persistence</td><td>None. All state polled live from the player.</td></tr>
+  </table>
+</div>
+
+</div>
+</body>
+</html>

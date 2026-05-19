@@ -1,0 +1,91 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN">
+<html>
+<head>
+<link rel="stylesheet" href="../style.css">
+<title>Logik - Sonos Klang-Erweiterung</title>
+<style>body { background: none; }</style>
+<meta http-equiv="Content-Type" content="text/html;charset=utf-8">
+</head>
+<body>
+<div class="top-title">Sonos Klang-Erweiterung</div>
+<div class="nav">
+  <a href="javascript:history.back()">Zurueck</a> /
+  <a href="javascript:history.forward()">Weiter</a> |
+  <a href="hlpsearch.html">Suche</a> |
+  <a href="index.html">Hilfe</a> /
+  <a href="logic.html">Logik</a> / Sonos Klang-Erweiterung
+</div>
+
+<div class="index">
+  <div class="index-title"><a id="doc_index_1_"></a>Inhalt</div>
+  <div class="t-line"><div class="t-chapter"><a href="#auto_index_anchor_1_">1.</a></div><div class="t-text"><a href="#auto_index_anchor_1_">Beschreibung</a></div></div>
+  <div class="t-line"><div class="t-chapter"><a href="#auto_index_anchor_2_">2.</a></div><div class="t-text"><a href="#auto_index_anchor_2_">Eingaenge</a></div></div>
+  <div class="t-line"><div class="t-chapter"><a href="#auto_index_anchor_3_">3.</a></div><div class="t-text"><a href="#auto_index_anchor_3_">Ausgaenge</a></div></div>
+  <div class="t-line"><div class="t-chapter"><a href="#auto_index_anchor_4_">4.</a></div><div class="t-text"><a href="#auto_index_anchor_4_">Sonstiges</a></div></div>
+</div>
+
+<div class="content">
+
+<div class="topic">
+  <h2 class="t-line"><a id="auto_index_anchor_1_"></a><span class="t-chapter">1.</span><span class="t-text">Beschreibung</span></h2>
+  <div class="descr">
+    Optionaler Begleitbaustein pro Player zum LBS 22000 Sonos Player. Enthaelt die Klang-Feineinstellungen, die nicht auf jedem Sonos-Baustein noetig sind: Bass / Hoehen, Loudness, Soundbar-EQ (Nachtmodus + Sprachmodus), Crossfade und Sleep-Timer. Eine Instanz pro Player auf die Canvas legen, der diese Extras braucht.
+  </div>
+  <div class="descr">
+    Der Player-Baustein (LBS 22000) behaelt die primaere Wiedergabesteuerung. Dieser Baustein ist rein additiv — fuer Kueche / Schlafzimmer, die nur Play / Pause / Lautstaerke per KNX brauchen, weglassen.
+  </div>
+  <div class="alert-box ibox-hint">
+    <div class="box-title">Hinweis</div>
+    <div class="box-text"><div class="descr">
+      Nur Polling, keine UPnP-Abonnements. Diese Einstellungen aendern sich selten; Aktualisierung im gleichen Tick-Takt wie der Player (Vorgabe 60 s) reicht. Soundbar-EQs (Nachtmodus, Sprachmodus) scheitern sauber auf Nicht-Soundbar-Hardware mit NIGHTMODE_UNSUPPORTED / DIALOGMODE_UNSUPPORTED auf LastError.
+    </div></div>
+  </div>
+</div>
+
+<div class="topic">
+  <h2 class="t-line"><a id="auto_index_anchor_2_"></a><span class="t-chapter">2.</span><span class="t-text">Eingaenge</span></h2>
+  <table class="table-in">
+    <tr><td class="io-nr center">E#</td><td class="io-name">Name</td><td class="io-init center">Init</td><td class="io-descr">Beschreibung</td></tr>
+    <tr><td class="io-nr input center">E1</td><td class="io-name">Host</td><td class="io-init string center"></td><td class="io-descr">Player-Kennung. Gleicher Wert wie beim passenden LBS 22000 (UUID empfohlen). Der Admin-Baustein loest UUID / MAC / Name / IP zur aktuellen Player-IP auf.</td></tr>
+    <tr><td class="io-nr input center">E2</td><td class="io-name">SetBass</td><td class="io-init center">0</td><td class="io-descr">Bass-Anpassung -10 bis +10. Wird auf den Bereich begrenzt. Bestaetigung erfolgt ueber den Bass-Ausgang nach erfolgreichem SOAP.</td></tr>
+    <tr><td class="io-nr input center">E3</td><td class="io-name">SetTreble</td><td class="io-init center">0</td><td class="io-descr">Hoehen-Anpassung -10 bis +10. Gleiche Begrenzung wie SetBass.</td></tr>
+    <tr><td class="io-nr input center">E4</td><td class="io-name">SetLoudness</td><td class="io-init center">0</td><td class="io-descr">Loudness-Kontur. 0 aus, nicht 0 ein. Besonders sinnvoll bei niedriger Hoerlautstaerke.</td></tr>
+    <tr><td class="io-nr input center">E5</td><td class="io-name">SetNightMode</td><td class="io-init center">0</td><td class="io-descr">Soundbar-Nachtmodus (Dynamikkompression fuer spaeten TV-Genuss). Funktioniert nur auf Beam / Arc / Playbar. Andere Player schreiben NIGHTMODE_UNSUPPORTED auf LastError.</td></tr>
+    <tr><td class="io-nr input center">E6</td><td class="io-name">SetDialogMode</td><td class="io-init center">0</td><td class="io-descr">Soundbar-Sprachmodus / Dialog-Anhebung. Gleiche Einschraenkung wie SetNightMode; nicht-Soundbar schreibt DIALOGMODE_UNSUPPORTED.</td></tr>
+    <tr><td class="io-nr input center">E7</td><td class="io-name">SetCrossfade</td><td class="io-init center">0</td><td class="io-descr">Crossfade zwischen Queue-Titeln. 0/1. Nur sinnvoll bei Queue / Playlist-Wiedergabe (Radio ignoriert es).</td></tr>
+    <tr><td class="io-nr input center">E8</td><td class="io-name">SetSleepTimer</td><td class="io-init center">0</td><td class="io-descr">Sleep-Timer in Minuten (0 bricht ab). Sonos stoppt die Wiedergabe wenn der Timer Null erreicht. SleepTimerRemaining zeigt die Restzeit.</td></tr>
+    <tr><td class="io-nr input center">E9</td><td class="io-name">PollInterval</td><td class="io-init center">0</td><td class="io-descr">Status-Abfrageintervall in Sekunden. Bei 0 wird der Wert aus der Admin-Webseite (Player Defaults) verwendet.</td></tr>
+    <tr><td class="io-nr input center">E10</td><td class="io-name">HttpTimeout</td><td class="io-init center">0</td><td class="io-descr">HTTP-Timeout in Sekunden. Bei 0 wird der Wert aus der Admin-Webseite verwendet.</td></tr>
+  </table>
+</div>
+
+<div class="topic">
+  <h2 class="t-line"><a id="auto_index_anchor_3_"></a><span class="t-chapter">3.</span><span class="t-text">Ausgaenge</span></h2>
+  <table class="table-out">
+    <tr><td class="io-nr center">A#</td><td class="io-name">Name</td><td class="io-init center">Init</td><td class="o-sbc center">SBC</td><td class="io-descr">Beschreibung</td></tr>
+    <tr><td class="io-nr output center">A1</td><td class="io-name">Online</td><td class="io-init center">0</td><td class="o-sbc center">ja</td><td class="io-descr">1 wenn mindestens ein SOAP im letzten Tick erfolgreich war.</td></tr>
+    <tr><td class="io-nr output center">A2</td><td class="io-name">Bass</td><td class="io-init center">0</td><td class="o-sbc center">ja</td><td class="io-descr">Aktuelle Bass-Einstellung -10 bis +10.</td></tr>
+    <tr><td class="io-nr output center">A3</td><td class="io-name">Treble</td><td class="io-init center">0</td><td class="o-sbc center">ja</td><td class="io-descr">Aktuelle Hoehen-Einstellung -10 bis +10.</td></tr>
+    <tr><td class="io-nr output center">A4</td><td class="io-name">Loudness</td><td class="io-init center">0</td><td class="o-sbc center">ja</td><td class="io-descr">1 = Loudness ein.</td></tr>
+    <tr><td class="io-nr output center">A5</td><td class="io-name">NightMode</td><td class="io-init center">0</td><td class="o-sbc center">ja</td><td class="io-descr">1 = Soundbar-Nachtmodus ein. Bleibt 0 auf Nicht-Soundbar-Hardware.</td></tr>
+    <tr><td class="io-nr output center">A6</td><td class="io-name">DialogMode</td><td class="io-init center">0</td><td class="o-sbc center">ja</td><td class="io-descr">1 = Soundbar-Sprachmodus ein.</td></tr>
+    <tr><td class="io-nr output center">A7</td><td class="io-name">Crossfade</td><td class="io-init center">0</td><td class="o-sbc center">ja</td><td class="io-descr">1 = Crossfade zwischen Queue-Titeln aktiv.</td></tr>
+    <tr><td class="io-nr output center">A8</td><td class="io-name">SleepTimerRemaining</td><td class="io-init center">0</td><td class="o-sbc center">ja</td><td class="io-descr">Sleep-Timer Restzeit in Sekunden. 0 = kein Timer.</td></tr>
+    <tr><td class="io-nr output center">A9</td><td class="io-name">LastError</td><td class="io-init string center"></td><td class="o-sbc center">ja</td><td class="io-descr">Letzter Fehlercode.</td></tr>
+  </table>
+</div>
+
+<div class="topic">
+  <h2 class="t-line"><a id="auto_index_anchor_4_"></a><span class="t-chapter">4.</span><span class="t-text">Sonstiges</span></h2>
+  <table class="table-logic-info">
+    <tr><td>LBS</td><td>22002</td></tr>
+    <tr><td>Version</td><td>1.0.0</td></tr>
+    <tr><td>Firmware</td><td>HSL3, HS 4.13 oder neuer</td></tr>
+    <tr><td>Externe Bibliotheken</td><td>requests (gebuendelt)</td></tr>
+    <tr><td>Netzwerk</td><td>TCP 1400 ausgehend zum Player</td></tr>
+  </table>
+</div>
+
+</div>
+</body>
+</html>

@@ -3,7 +3,7 @@
 Every user-facing function the integration exposes, and where it lives
 in the HSL3 modules. Refreshed against the v1.0.0 module shipped in
 this repo: **LBS 22000 Sonos Player** with 29 inputs / 28 outputs and
-**LBS 22001 Sonos Admin** with 7 inputs / 8 outputs + 6 retentive
+**LBS 22002 Sonos Sound Enhancement** (optional companion) with 10 inputs / 9 outputs and no persistent state. **LBS 22001 Sonos Admin** with 7 inputs / 8 outputs + 6 retentive
 stores.
 
 ## Sonos control surface (LBS 22000 inputs)
@@ -104,6 +104,29 @@ stores.
 | Native announcement (S2) | `AudioClip.LoadAudioClip` SOAP at `/AudioClip/Control` | Service `urn:schemas-sonos-com:service:AudioClip:1`. `ClipType=CUSTOM` + `StreamUrl` makes Sonos fetch the audio and play it on top of the current source — ducking + auto-resume handled by the player firmware. The same service Home Assistant's `announce: true` uses on modern hardware. |
 | Cross-LBS URL resolution | `get_sound_url` module-level helper | Returns `http://<hs-ip>:<admin-port>/sounds/<id>/<filename>` using the Admin's bound port. |
 | Fallback for S1 / older firmware | `_snapshot_transport` + `_wait_until_stopped` + `_restore_transport` | Captures CurrentURI + metadata, RelTime, TransportState, Volume, Mute. After the clip ends restores via SetAVTransportURI → Seek(REL_TIME) → SetVolume → SetMute → Play (only if the snapshot was PLAYING). Radio-stream Seek rejection (UPnP 711) is ignored — radio resumes "from now" rather than the original timestamp. |
+
+## Sound Enhancement (LBS 22002, optional)
+
+Per-player companion that adds the sound-tuning controls not worth
+carrying on every Player block. Polling-only — no UPnP subscriptions.
+The Host input takes the same UUID/MAC/name/IP as the matching LBS
+22000; resolution goes through the Admin registry.
+
+| Function | LBS 22002 input | Output | Notes |
+| --- | --- | --- | --- |
+| Bass | `SetBass` (E2) | `Bass` (A2) | -10..+10, clamped at the input boundary. Issues `RenderingControl#SetBass`. |
+| Treble | `SetTreble` (E3) | `Treble` (A3) | -10..+10, same clamping. `RenderingControl#SetTreble`. |
+| Loudness | `SetLoudness` (E4) | `Loudness` (A4) | 0/1. `RenderingControl#SetLoudness` with `Channel=Master`. |
+| Soundbar Night Mode | `SetNightMode` (E5) | `NightMode` (A5) | `RenderingControl#SetEQ` with `EQType=NightMode`. Non-soundbars surface `NIGHTMODE_UNSUPPORTED` on `LastError`. |
+| Soundbar Dialog Mode | `SetDialogMode` (E6) | `DialogMode` (A6) | `RenderingControl#SetEQ` with `EQType=DialogLevel`. `DIALOGMODE_UNSUPPORTED` on non-soundbars. |
+| Crossfade | `SetCrossfade` (E7) | `Crossfade` (A7) | `AVTransport#SetCrossfadeMode`. |
+| Sleep timer | `SetSleepTimer` (E8) | `SleepTimerRemaining` (A8) | Minutes in (0 cancels); `AVTransport#ConfigureSleepTimer` with `NewSleepTimerDuration=HH:MM:SS`. Output is the remaining seconds polled via `GetRemainingSleepTimerDuration`. |
+| Reachability | n/a | `Online` (A1) | 1 when at least one SOAP call in the latest Tick succeeded. |
+| Error | n/a | `LastError` (A9) | `SET_BASS_FAILED` / `NIGHTMODE_UNSUPPORTED` / `DIALOGMODE_UNSUPPORTED` / `UNREACHABLE` / `HTTP_<n>` / `EXCEPTION: …`. |
+
+Tunable inputs `PollInterval` (E9) and `HttpTimeout` (E10) follow the
+same fall-through pattern as on LBS 22000 — leave at 0 to use the
+Admin's Player Defaults values.
 
 ## Group presets
 

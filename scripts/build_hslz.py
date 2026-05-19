@@ -57,6 +57,12 @@ MODULES = [
         "src_dir": ROOT / "projects" / "sonos_admin_hsl3",
         "hsl_name": "22001_sonos_admin.hsl",
     },
+    {
+        "id": "22002",
+        "name": "sonos_sound",
+        "src_dir": ROOT / "projects" / "sonos_sound_hsl3",
+        "hsl_name": "22002_sonos_sound.hsl",
+    },
 ]
 
 

@@ -5,12 +5,13 @@ control Sonos players over the local UPnP/SOAP API. No bridge service,
 no external machine, no SSH access required — the integration runs
 entirely inside the HomeServer's own logic engine.
 
-Two LBS modules:
+Three LBS modules:
 
 | LBS | Name | Role |
 | --- | --- | --- |
 | **22000** | Sonos Player | One instance per Sonos player. Play / pause / stop / next / prev (both rising-edge and value-toggle inputs), volume, mute, shuffle, repeat, preset stepping through the Admin library, status outputs (discrete Is\* booleans, per-action \*Allowed flags so a Gira tile can grey out buttons the player would reject, Album, AlbumArtURI, active preset name, group info), UPnP event push. |
 | **22001** | Sonos Admin | Singleton companion. Web UI at `http://<hs-ip>:8080/` for managing players (by **UUID / MAC / IP / name**), a global preset library (radio / playlists / line-in / Bluetooth), group presets, project-wide Player Defaults, and Sonos Cloud OAuth. Runs periodic + KNX-triggerable SSDP discovery with a structured `DiscoveredPlayers` output. All inside HSL3, no external process. Optional but recommended. |
+| **22002** | Sonos Sound Enhancement | **Optional** per-player companion to LBS 22000. Adds Bass, Treble, Loudness, soundbar Night Mode + Dialog Mode, Crossfade, and the Sleep Timer — settings that don't belong on every Player block. Drop one in for any speaker that needs the extras; leave it off elsewhere. |
 
 Compatible with Sonos firmware **2024+ and 2026** and Gira HomeServer
 firmware **4.13+** (HSL3 / Python 3.9 logic-module SDK).
@@ -69,7 +70,13 @@ firmware **4.13+** (HSL3 / Python 3.9 logic-module SDK).
   On S1 hardware (no AudioClip service) it falls back to a snapshot /
   play / restore cycle. Library starts empty; drop in any MP3 / WAV /
   AAC / OGG / FLAC up to 2 MB.
-- **96 unit tests** with a stubbed `Hsl3Framework`, runnable in CI.
+- **Optional sound-tuning companion (LBS 22002).** Bass, Treble,
+  Loudness, soundbar Night Mode + Dialog Mode, Crossfade, Sleep
+  Timer. Per-player, additive — leave it off when you don't need
+  the extras; drop it on the canvas next to LBS 22000 when you do.
+  Soundbar EQ types fail gracefully on non-soundbar hardware with
+  a tagged LastError.
+- **108 unit tests** with a stubbed `Hsl3Framework`, runnable in CI.
 
 ## Repository layout
 
@@ -86,14 +93,16 @@ firmware **4.13+** (HSL3 / Python 3.9 logic-module SDK).
 │   └── style.css                SDK stylesheet
 ├── projects/
 │   ├── sonos_player_hsl3/       LBS 22000 source: config.json + hsl3_22000_*.py
-│   └── sonos_admin_hsl3/        LBS 22001 source: config.json + hsl3_22001_*.py
+│   ├── sonos_admin_hsl3/        LBS 22001 source: config.json + hsl3_22001_*.py
+│   └── sonos_sound_hsl3/        LBS 22002 source: config.json + hsl3_22002_*.py
 ├── scripts/
 │   └── build_hslz.py            packager → dist/*.hslz
 ├── tests/
-│   └── test_logic_modules.py    96 unit tests with a stubbed framework
+│   └── test_logic_modules.py    108 unit tests with a stubbed framework
 └── dist/
     ├── 22000_sonos_player.hslz  deployable archive (committed)
-    └── 22001_sonos_admin.hslz
+    ├── 22001_sonos_admin.hslz
+    └── 22002_sonos_sound.hslz
 ```
 
 ## Quick start
@@ -138,7 +147,7 @@ on a machine that has the SDK.
 python3 tests/test_logic_modules.py
 ```
 
-96 tests covering: pure helpers (SOAP fault extraction, NOTIFY parsing,
+108 tests covering: pure helpers (SOAP fault extraction, NOTIFY parsing,
 URI normalisation, play-mode composition, transport-actions parsing,
 iso-8859-15 encoding), the
 `LogicModule` IO contract (string outputs are bytes, numeric outputs

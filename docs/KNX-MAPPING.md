@@ -153,6 +153,42 @@ buttons in a visualisation that the player would reject.
 | 5/0/160 | 1.002  | `IsCoordinator` | 1 = standalone or this player is the group coordinator. 0 = this player is a slave in someone else's group. |
 | 5/0/161 | 16.001 | `GroupInfo`     | When slave: master's Zone Name (resolved via Admin) or RINCON UUID. Empty when coordinator/standalone. |
 
+## Sound Enhancement companion (LBS 22002) — recommended GAs
+
+Optional per-player block. Skip if you didn't drop an LBS 22002 onto
+the canvas. The Host input takes the same value as the matching LBS
+22000.
+
+### Inputs
+
+| GA | DPT | Input | Description |
+| --- | --- | --- | --- |
+| 5/0/300 | 6.010 | `SetBass`       | -10..+10 (signed 1-byte) |
+| 5/0/301 | 6.010 | `SetTreble`     | -10..+10 |
+| 5/0/302 | 1.001 | `SetLoudness`   | 0/1 |
+| 5/0/303 | 1.001 | `SetNightMode`  | 0/1 (soundbar only) |
+| 5/0/304 | 1.001 | `SetDialogMode` | 0/1 (soundbar only) |
+| 5/0/305 | 1.001 | `SetCrossfade`  | 0/1 |
+| 5/0/306 | 7.007 | `SetSleepTimer` | minutes (2-byte unsigned). 0 cancels. |
+
+### Outputs
+
+| GA | DPT | Output | Description |
+| --- | --- | --- | --- |
+| 5/0/310 | 1.002 | `Online`              | 1 = SOAP reachable |
+| 5/0/311 | 6.010 | `Bass`                | -10..+10 |
+| 5/0/312 | 6.010 | `Treble`              | -10..+10 |
+| 5/0/313 | 1.002 | `Loudness`            | 0/1 |
+| 5/0/314 | 1.002 | `NightMode`           | 0/1 |
+| 5/0/315 | 1.002 | `DialogMode`          | 0/1 |
+| 5/0/316 | 1.002 | `Crossfade`           | 0/1 |
+| 5/0/317 | 7.005 | `SleepTimerRemaining` | seconds remaining (2-byte) |
+| 5/0/318 | 16.001 | `LastError`          | Error tag (`NIGHTMODE_UNSUPPORTED`, `UNREACHABLE`, …) |
+
+DPT 6.010 "Counter pulses (signed)" carries the -10..+10 range
+natively. DPT 7.007 "Time (16-bit unsigned)" gives plenty of room
+for sleep timer minutes (max ~18 hours).
+
 ## DPT cheat sheet
 
 - **DPT 1.001** "Switch" and **1.002** "Boolean": both 1-bit, semantically

@@ -1,0 +1,70 @@
+{
+  "module": {
+    "id": "22002",
+    "context": "sonos.bridge",
+    "category": "Multimedia\\Sonos",
+    "name": "Sonos Sound Enhancement",
+    "version": "1.0.0",
+    "hsl_filename": "22002_sonos_sound.hsl",
+    "inputs": [
+      { "type": "string", "identifier": "Host",         "init_value": "",  "label": "Player Host UUID MAC name or IP" },
+      { "type": "number", "identifier": "SetBass",      "init_value": 0,   "label": "Set Bass -10 to 10" },
+      { "type": "number", "identifier": "SetTreble",    "init_value": 0,   "label": "Set Treble -10 to 10" },
+      { "type": "number", "identifier": "SetLoudness",  "init_value": 0,   "label": "Set Loudness" },
+      { "type": "number", "identifier": "SetNightMode", "init_value": 0,   "label": "Set Night Mode soundbar only" },
+      { "type": "number", "identifier": "SetDialogMode","init_value": 0,   "label": "Set Dialog Mode soundbar only" },
+      { "type": "number", "identifier": "SetCrossfade", "init_value": 0,   "label": "Set Crossfade" },
+      { "type": "number", "identifier": "SetSleepTimer","init_value": 0,   "label": "Set Sleep Timer minutes 0 cancels" },
+      { "type": "number", "identifier": "PollInterval", "init_value": 0,   "label": "Status Poll Interval seconds 0 uses Admin default" },
+      { "type": "number", "identifier": "HttpTimeout",  "init_value": 0,   "label": "HTTP Timeout seconds 0 uses Admin default" }
+    ],
+    "outputs": [
+      { "type": "number", "identifier": "Online",        "init_value": 0,  "label": "Online" },
+      { "type": "number", "identifier": "Bass",          "init_value": 0,  "label": "Bass -10 to 10" },
+      { "type": "number", "identifier": "Treble",        "init_value": 0,  "label": "Treble -10 to 10" },
+      { "type": "number", "identifier": "Loudness",      "init_value": 0,  "label": "Loudness" },
+      { "type": "number", "identifier": "NightMode",     "init_value": 0,  "label": "Night Mode" },
+      { "type": "number", "identifier": "DialogMode",    "init_value": 0,  "label": "Dialog Mode" },
+      { "type": "number", "identifier": "Crossfade",     "init_value": 0,  "label": "Crossfade" },
+      { "type": "number", "identifier": "SleepTimerRemaining","init_value": 0, "label": "Sleep Timer Remaining Seconds" },
+      { "type": "string", "identifier": "LastError",     "init_value": "", "label": "Last Error" }
+    ],
+    "stores": [],
+    "timers": [
+      { "identifier": "Tick" }
+    ],
+    "scripts": [
+      { "filename": "hsl3_22002_sonos_sound.py" }
+    ],
+    "translations": [
+      {
+        "language": "de",
+        "name": "Sonos Klang-Erweiterung",
+        "category": "Multimedia\\Sonos",
+        "translation_inputs": [
+          { "label": "Player Host UUID MAC Name oder IP" },
+          { "label": "Bass setzen -10 bis 10" },
+          { "label": "Hoehen setzen -10 bis 10" },
+          { "label": "Loudness setzen" },
+          { "label": "Nachtmodus setzen Soundbar" },
+          { "label": "Sprachmodus setzen Soundbar" },
+          { "label": "Crossfade setzen" },
+          { "label": "Sleep-Timer Minuten 0 bricht ab" },
+          { "label": "Status-Abfrageintervall Sekunden 0 nutzt Admin-Vorgabe" },
+          { "label": "HTTP-Timeout Sekunden 0 nutzt Admin-Vorgabe" }
+        ],
+        "translation_outputs": [
+          { "label": "Online" },
+          { "label": "Bass -10 bis 10" },
+          { "label": "Hoehen -10 bis 10" },
+          { "label": "Loudness" },
+          { "label": "Nachtmodus" },
+          { "label": "Sprachmodus" },
+          { "label": "Crossfade" },
+          { "label": "Sleep-Timer Restzeit Sekunden" },
+          { "label": "Letzter Fehler" }
+        ]
+      }
+    ]
+  }
+}

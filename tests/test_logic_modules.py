@@ -18,6 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PLAYER_PY = ROOT / "projects" / "sonos_player_hsl3" / "hsl3_22000_sonos_player.py"
 ADMIN_PY = ROOT / "projects" / "sonos_admin_hsl3" / "hsl3_22001_sonos_admin.py"
+SOUND_PY = ROOT / "projects" / "sonos_sound_hsl3" / "hsl3_22002_sonos_sound.py"
 
 
 def load_module(path: Path, mod_name: str):
@@ -2053,6 +2054,222 @@ class TestPlayerHostResolution(unittest.TestCase):
 
     def test_unresolvable_returns_empty(self):
         self.assertEqual(self.player.resolve_host_spec("nope"), "")
+
+
+# ---------------------------------------------------------------------------
+# LBS 22002 — Sonos Sound Enhancement (optional companion to LBS 22000).
+# ---------------------------------------------------------------------------
+
+
+def make_sound_inputs(host="10.0.0.1", **overrides):
+    base = {
+        "Host":           StubSlot(host),
+        "SetBass":        StubSlot(0),
+        "SetTreble":      StubSlot(0),
+        "SetLoudness":    StubSlot(0),
+        "SetNightMode":   StubSlot(0),
+        "SetDialogMode":  StubSlot(0),
+        "SetCrossfade":   StubSlot(0),
+        "SetSleepTimer":  StubSlot(0),
+        "PollInterval":   StubSlot(0),
+        "HttpTimeout":    StubSlot(0),
+    }
+    base.update({k: (v if isinstance(v, StubSlot) else StubSlot(v))
+                 for k, v in overrides.items()})
+    return StubSlots(base)
+
+
+class TestSonosSoundHelpers(unittest.TestCase):
+    """Pure helpers — no framework needed."""
+
+    @classmethod
+    def setUpClass(cls):
+        sys.modules.setdefault("requests", _make_requests_stub())
+        cls.mod = load_module(SOUND_PY, "sonos_sound_22002_helpers")
+
+    def test_minutes_to_duration_formats_hh_mm_ss(self):
+        m = self.mod.minutes_to_duration
+        self.assertEqual(m(0),   "")     # 0 cancels the timer
+        self.assertEqual(m(-5),  "")     # negative also cancels
+        self.assertEqual(m(1),   "0:01:00")
+        self.assertEqual(m(59),  "0:59:00")
+        self.assertEqual(m(60),  "1:00:00")
+        self.assertEqual(m(125), "2:05:00")
+        # Garbage in → empty out, doesn't raise
+        self.assertEqual(m("abc"), "")
+        self.assertEqual(m(None),  "")
+
+    def test_duration_to_seconds_parses_sonos_format(self):
+        d = self.mod.duration_to_seconds
+        self.assertEqual(d(""),         0)
+        self.assertEqual(d(None),       0)
+        self.assertEqual(d("0:00:00"),  0)
+        self.assertEqual(d("0:01:30"),  90)
+        self.assertEqual(d("2:00:00"),  7200)
+        self.assertEqual(d("garbage"),  0)
+        self.assertEqual(d("1:2:3:4"),  0)
+
+    def test_clamp_constrains_range(self):
+        c = self.mod.clamp
+        self.assertEqual(c(0,  -10, 10), 0)
+        self.assertEqual(c(15, -10, 10), 10)
+        self.assertEqual(c(-15,-10, 10), -10)
+        self.assertEqual(c("abc", -10, 10), 0)
+
+
+class TestSonosSoundLogicModule(unittest.TestCase):
+    """LogicModule IO contract + action dispatch with a stubbed SOAP layer."""
+
+    @classmethod
+    def setUpClass(cls):
+        sys.modules.setdefault("requests", _make_requests_stub())
+        cls.mod = load_module(SOUND_PY, "sonos_sound_22002_lm")
+
+    def _make(self):
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._host = "10.0.0.5"
+        lm._http_timeout_s = 5
+        # Run actions inline so each on_calc test is deterministic.
+        lm._run_threaded = lambda fn: fn()
+        return fw, lm
+
+    def test_set_bass_clamps_and_dispatches(self):
+        fw, lm = self._make()
+        calls = []
+        lm._soap = lambda s, a, e: (calls.append((s, a, e)) or (True, "", ""))
+        ins = make_sound_inputs(host="10.0.0.5", SetBass=15)
+        ins["SetBass"] = StubSlot(15, changed=True)
+        lm.on_calc(ins)
+        self.assertEqual(calls[0][1], "SetBass")
+        self.assertIn("<DesiredBass>10</DesiredBass>", calls[0][2])
+        self.assertEqual(fw.outputs["Bass"], 10.0)
+
+    def test_set_treble_clamps_negative(self):
+        fw, lm = self._make()
+        calls = []
+        lm._soap = lambda s, a, e: (calls.append((s, a, e)) or (True, "", ""))
+        ins = make_sound_inputs(host="10.0.0.5")
+        ins["SetTreble"] = StubSlot(-99, changed=True)
+        lm.on_calc(ins)
+        self.assertEqual(calls[0][1], "SetTreble")
+        self.assertIn("<DesiredTreble>-10</DesiredTreble>", calls[0][2])
+        self.assertEqual(fw.outputs["Treble"], -10.0)
+
+    def test_set_loudness_dispatches(self):
+        fw, lm = self._make()
+        calls = []
+        lm._soap = lambda s, a, e: (calls.append((s, a, e)) or (True, "", ""))
+        ins = make_sound_inputs(host="10.0.0.5")
+        ins["SetLoudness"] = StubSlot(1, changed=True)
+        lm.on_calc(ins)
+        self.assertEqual(calls[0][1], "SetLoudness")
+        self.assertIn("<DesiredLoudness>1</DesiredLoudness>", calls[0][2])
+        self.assertEqual(fw.outputs["Loudness"], 1)
+
+    def test_set_nightmode_unsupported_writes_tagged_error(self):
+        """Non-soundbar players reject SetEQ NightMode with a SOAP
+        fault. The module must surface that as NIGHTMODE_UNSUPPORTED
+        — clearer than a generic 'EQ failed' — so the integrator can
+        diagnose the wiring."""
+        fw, lm = self._make()
+        # Stub SOAP to fail.
+        lm._soap = lambda s, a, e: (False, "<errorCode>800</errorCode>", "800")
+        ins = make_sound_inputs(host="10.0.0.5")
+        ins["SetNightMode"] = StubSlot(1, changed=True)
+        lm.on_calc(ins)
+        self.assertEqual(fw.outputs["LastError"], b"NIGHTMODE_UNSUPPORTED")
+        # NightMode output stays at init (no _mark_night call).
+        self.assertNotIn("NightMode", fw.outputs)
+
+    def test_set_dialogmode_success_marks_output(self):
+        fw, lm = self._make()
+        lm._soap = lambda s, a, e: (True, "", "")
+        ins = make_sound_inputs(host="10.0.0.5")
+        ins["SetDialogMode"] = StubSlot(1, changed=True)
+        lm.on_calc(ins)
+        self.assertEqual(fw.outputs["DialogMode"], 1)
+
+    def test_set_crossfade_dispatches(self):
+        fw, lm = self._make()
+        calls = []
+        lm._soap = lambda s, a, e: (calls.append(a) or (True, "", ""))
+        ins = make_sound_inputs(host="10.0.0.5")
+        ins["SetCrossfade"] = StubSlot(1, changed=True)
+        lm.on_calc(ins)
+        self.assertEqual(calls, ["SetCrossfadeMode"])
+        self.assertEqual(fw.outputs["Crossfade"], 1)
+
+    def test_set_sleep_timer_sends_hh_mm_ss(self):
+        """SetSleepTimer minute value gets formatted as HH:MM:SS per
+        Sonos's ConfigureSleepTimer contract. 0 cancels — sent as the
+        empty NewSleepTimerDuration string."""
+        fw, lm = self._make()
+        calls = []
+        lm._soap = lambda s, a, e: (calls.append((a, e)) or (True, "", ""))
+        ins = make_sound_inputs(host="10.0.0.5")
+        ins["SetSleepTimer"] = StubSlot(90, changed=True)
+        lm.on_calc(ins)
+        self.assertEqual(calls[0][0], "ConfigureSleepTimer")
+        self.assertIn("<NewSleepTimerDuration>1:30:00</NewSleepTimerDuration>",
+                      calls[0][1])
+        # Cancellation
+        calls.clear()
+        ins = make_sound_inputs(host="10.0.0.5")
+        ins["SetSleepTimer"] = StubSlot(0, changed=True)
+        lm.on_calc(ins)
+        self.assertEqual(calls[0][0], "ConfigureSleepTimer")
+        self.assertIn("<NewSleepTimerDuration></NewSleepTimerDuration>",
+                      calls[0][1])
+
+    def test_tick_polls_all_seven_and_sets_online(self):
+        """A single Tick should poll every parameter and flip Online
+        when at least one SOAP returned 200."""
+        fw, lm = self._make()
+        polls = []
+        def fake_soap(service, action, envelope):
+            polls.append(action)
+            # Return believable payloads for each GET so the parsers
+            # produce the expected outputs.
+            if action == "GetBass":     return (True, "<CurrentBass>3</CurrentBass>", "")
+            if action == "GetTreble":   return (True, "<CurrentTreble>-2</CurrentTreble>", "")
+            if action == "GetLoudness": return (True, "<CurrentLoudness>1</CurrentLoudness>", "")
+            if action == "GetEQ":
+                # NightMode + DialogLevel — same response shape.
+                return (True, "<CurrentValue>1</CurrentValue>", "")
+            if action == "GetCrossfadeMode":
+                return (True, "<CrossfadeMode>0</CrossfadeMode>", "")
+            if action == "GetRemainingSleepTimerDuration":
+                return (True, "<RemainingSleepTimerDuration>0:15:00</RemainingSleepTimerDuration>", "")
+            return (True, "", "")
+        lm._soap = fake_soap
+        lm._tick_work()
+        # All 7 GETs issued
+        for needed in ("GetBass", "GetTreble", "GetLoudness", "GetEQ",
+                       "GetCrossfadeMode", "GetRemainingSleepTimerDuration"):
+            self.assertIn(needed, polls, needed)
+        # Outputs reflect the parsed values
+        self.assertEqual(fw.outputs["Bass"],         3.0)
+        self.assertEqual(fw.outputs["Treble"],      -2.0)
+        self.assertEqual(fw.outputs["Loudness"],     1)
+        self.assertEqual(fw.outputs["NightMode"],    1)
+        self.assertEqual(fw.outputs["DialogMode"],   1)
+        self.assertEqual(fw.outputs["Crossfade"],    0)
+        self.assertEqual(fw.outputs["SleepTimerRemaining"], 900.0)
+        self.assertEqual(fw.outputs["Online"],       1)
+
+    def test_no_host_writes_error_without_soap(self):
+        fw, lm = self._make()
+        lm._host = ""
+        calls = []
+        lm._soap = lambda *a, **kw: (calls.append(a) or (True, "", ""))
+        ins = make_sound_inputs(host="")
+        ins["SetBass"] = StubSlot(3, changed=True)
+        lm.on_calc(ins)
+        # No SOAP because no host
+        self.assertEqual(calls, [])
+        self.assertEqual(fw.outputs["LastError"], b"NO_HOST_CONFIGURED")
 
 
 if __name__ == "__main__":
