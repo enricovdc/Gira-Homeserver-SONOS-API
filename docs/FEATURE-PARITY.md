@@ -3,7 +3,7 @@
 Every user-facing function the integration exposes, and where it lives
 in the HSL3 modules. Refreshed against the v1.0.0 module shipped in
 this repo: **LBS 22000 Sonos Player** with 28 inputs / 28 outputs and
-**LBS 22001 Sonos Admin** with 7 inputs / 8 outputs + 5 retentive
+**LBS 22001 Sonos Admin** with 7 inputs / 8 outputs + 6 retentive
 stores.
 
 ## Sonos control surface (LBS 22000 inputs)

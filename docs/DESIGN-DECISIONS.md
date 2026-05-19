@@ -94,22 +94,33 @@ This is the pattern shown in the GiraHSL skill's `examples.md` for
 HTTP-poller modules. It is the only safe way to do network I/O in
 HSL3.
 
-## 7. State in module-level globals, not stores
+## 7. Volatile state in instance attributes; retentive stores only for what truly persists
 
-The bridge persisted state in `config.json` on disk. The HSL3 module
-keeps subscription SIDs, last-known values, and edge-detection history
-in **instance attributes** (`self._sid_av`, `self._last_state`, …).
-These survive between block runs (the LogicModule is instantiated once
-and reused), but reset when the Experte downloads the project.
+The two modules split state differently:
 
-Stores (`self.fw.set_store`) are reserved for values that must
-survive a download (e.g. a permanent counter). Subscription SIDs
-explicitly do not — they are renewed within one Tick of any restart.
+- **Player (LBS 22000)** keeps subscription SIDs, last-known
+  outputs, edge-detection history, and the snapshot taken before a
+  sound clip plays in **instance attributes** (`self._sid_av`,
+  `self._last_state`, `self._active_station`, …). These survive
+  between block runs (the LogicModule is instantiated once and
+  reused) but reset when the Experte downloads the project. The
+  Player has no retentive stores. Anything worth persisting lives in
+  the Admin.
 
-A single placeholder `Reserved` store entry exists per module because
-the HSL3 generator crashes if `stores` is empty AND because
-`stores[].type` is a required field; if a future maintainer adds a
-real store they'll have a working pattern to copy.
+- **Admin (LBS 22001)** has six retentive stores:
+  `PersistedPlayers` (discovered + manual players),
+  `PersistedStations` (preset library, including DIDL-Lite metadata
+  for cloud-service favorites), `PersistedGroups` (group presets),
+  `PersistedCloud` (OAuth credentials + tokens),
+  `PersistedPlayerDefaults` (project-wide tunable defaults), and
+  `PersistedSounds` (uploaded notification clips, audio bytes
+  base64-encoded inside the JSON blob). On `on_init` they reload;
+  every mutation writes back via `_persist` (marshalled into node
+  context so HTTP-thread mutations don't trip `Hsl3ContextError`).
+
+Subscription SIDs deliberately are NOT stored — they re-bootstrap
+within one Tick of any restart, and a stale SID after a player
+reboot would fail HTTP 412 anyway.
 
 ## 8. Status polling alongside event push
 
@@ -126,34 +137,75 @@ timer also issues a SOAP status poll. Reasons:
 The cost is low (3 SOAP calls every `PollInterval` per player) and
 the operational gain is substantial.
 
-## 9. Direct stream URIs, not Sonos favorites
+## 9. Admin-managed preset library, not per-player URI inputs
 
-Reading the player's "Favorites" via `ContentDirectory#Browse` is
-brittle:
+An earlier revision shipped eight `StationNUri` inputs per Player
+block. It worked but had three sharp edges:
 
-- The response is heterogeneous DIDL-Lite mixing SMAPI items (Spotify,
-  Apple Music) and direct streams.
-- SMAPI-bound items require an account token and a service ID that
-  changes across firmware.
-- The list order is owned by the user via the Sonos app; the LBS
-  can't predict the meaning of "favorite #3".
+- **Eight is arbitrary**. Real installations have ~3 presets for the
+  bathroom radio, ~15 for the living room, none in the bedroom. A
+  fixed slot count is the wrong shape.
+- **Editing presets meant editing the project**. A new radio URL
+  required opening Experte, finding every player block that should
+  expose it, and re-downloading.
+- **Cloud-service URIs (TuneIn / Spotify / Apple Music) don't survive
+  a bare URI**. They need DIDL-Lite metadata with the music-service
+  binding (`<desc id="cdudn">SA_RINCON…</desc>`) — there's no way to
+  paste that into an Experte string input.
 
-Eight configurable stream URIs let the integrator pick once, from the
-Sonos app's "Information" panel, and bind them to KNX. Stable, no
-account dependencies, immune to SMAPI changes.
+The Admin module's preset library solves all three: one centralised
+list across every Player block, edited via the web UI without
+re-downloading the project, with the full DIDL-Lite metadata
+captured when the integrator imports a Sonos Favorite. LBS 22000's
+`StartRadio` / `StartRadioName` look it up via `sys.modules` —
+zero coupling, optional dependency (the Player works standalone but
+without preset capability).
 
-## 10. No Sonos zone-group management
+For radio-stream presets the metadata-fallback ladder still applies
+(`x-rincon-mp3radio://` rewrite + retry on UPnP error codes 714 /
+716 / 800), so the preset library doesn't lose direct-stream
+robustness.
 
-Each LBS instance controls one player by IP. Stereo pairs / surround
-setups / coordinated groups are best controlled by targeting the
-*group coordinator's* IP and letting Sonos propagate. Modeling group
-membership in HSL would have required maintaining a separate
-ZoneGroupTopology subscription and a join/leave control surface that
-KNX doesn't naturally express.
+## 10. Group presets — pre-define, don't ad-hoc
 
-If grouped control becomes necessary, the right shape is an
-additional LBS that subscribes to ZoneGroupTopology and exposes
-group-add / group-remove / group-coordinator outputs.
+Sonos exposes zone-group joining via
+`SetAVTransportURI(x-rincon:<master-uuid>)`. Modelling that as live
+inputs on every Player block (master-uuid + join/leave) would have
+required mirroring `ZoneGroupTopology` and a join/leave control
+surface KNX doesn't naturally express.
+
+Instead, the Admin holds named group presets (master + members,
+typed and validated against the player registry). LBS 22000's
+`GroupPreset` / `GroupPresetName` triggers the dispatch; `Ungroup`
+breaks this player out via `BecomeCoordinatorOfStandaloneGroup`.
+This puts the multi-room control surface in the same place as the
+multi-room *definition*, and a "kitchen + bathroom" group becomes
+a single KNX address — not a multi-block scene logic.
+
+Member status surfaces back via the `IsCoordinator` + `GroupInfo`
+outputs (derived from `CurrentTrackURI` starting with `x-rincon:`),
+so visualisations can show "Living Room: following Kitchen" without
+the LBS needing a separate ZoneGroupTopology subscription.
+
+## 11. Notification announcements via Sonos's native AudioClip
+
+For doorbells / alarms / TTS, the Sonos S2 firmware exposes
+`AudioClip.LoadAudioClip` at `/AudioClip/Control` (service
+`urn:schemas-sonos-com:service:AudioClip:1`). It plays a clip on top
+of the current source — the player ducks the music, plays the clip,
+and resumes automatically. Same path Home Assistant's `announce:
+true` uses.
+
+The implementation tries this first. Older S1 hardware (no AudioClip
+service) returns a SOAP fault, at which point we fall back to the
+snapshot/restore pattern: `GetMediaInfo` + `GetPositionInfo` +
+`GetTransportInfo` + `GetVolume` + `GetMute` → play the clip → poll
+for `STOPPED` → `SetAVTransportURI` back + `Seek` + restore Volume
++ Mute + (re-)`Play`. Strictly worse — there's an audible gap —
+but functional on every Sonos generation.
+
+The sound bytes are served by the Admin's HTTP listener at
+`/sounds/<id>/<filename>`. No external file hosting needed.
 
 ## 11. No external dependencies beyond `requests`
 

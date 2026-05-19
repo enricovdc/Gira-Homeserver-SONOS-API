@@ -90,7 +90,7 @@ firmware **4.13+** (HSL3 / Python 3.9 logic-module SDK).
 ├── scripts/
 │   └── build_hslz.py            packager → dist/*.hslz
 ├── tests/
-│   └── test_logic_modules.py    78 unit tests with a stubbed framework
+│   └── test_logic_modules.py    95 unit tests with a stubbed framework
 └── dist/
     ├── 22000_sonos_player.hslz  deployable archive (committed)
     └── 22001_sonos_admin.hslz
