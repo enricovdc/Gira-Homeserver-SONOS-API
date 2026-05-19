@@ -31,7 +31,7 @@ stores.
 | Play / Pause toggle (single 1-bit GA) | `PlayPause` (E20) | Value-driven. Writing 1 plays, writing 0 pauses. Pairs with one KNX toggle GA. |
 | Next / Previous track toggle | `NextPrev` (E21) | Value-driven. Writing 1 = next, writing 0 = previous. |
 | Next / Previous preset toggle | `PresetNextPrev` (E22) | Steps through the Admin preset library alphabetically. Wraps at both ends. NO_PRESETS on LastError if the library is empty. |
-| Play notification sound | `PlaySound` (E23) | Plays a clip from the Admin Sounds library (alphabetical index 1..N) using Sonos's native SetAVTransportURI + Play. Snapshots state first, polls for STOPPED, then restores the previous source / position / volume / mute / transport state. |
+| Play notification sound | `PlaySound` (E23) | Equivalent to Home Assistant's Sonos `announce: true`. Plays a clip from the Admin Sounds library (alphabetical index 1..N). Primary path uses the native `AudioClip.LoadAudioClip` SOAP action on `urn:schemas-sonos-com:service:AudioClip:1` — Sonos S2 firmware ducks the current music, plays the clip, and resumes automatically. On S1 hardware (no AudioClip service) falls back to snapshot + SetAVTransportURI + Play + poll-for-STOPPED + restore. |
 
 ## Status / observability (LBS 22000 outputs)
 
@@ -99,9 +99,10 @@ stores.
 | List sounds | `GET /api/sounds` | Returns `[{id, name, filename, size, mime, index}]` — `data_b64` is never echoed back to keep listing payloads small. |
 | Rename / delete | `PATCH` / `DELETE /api/sounds/{id}` | Standard CRUD. |
 | Serve audio to Sonos | `GET /sounds/{id}/{filename}` | Public route the Sonos player fetches when LBS 22000 plays the clip. Sets the right `Content-Type` from the upload's MIME so decoders pick the right codec. |
-| Trigger from KNX / Player block | LBS 22000 input `PlaySound` (E23) | Writes alphabetical index → `_action_play_sound` → snapshot → SetAVTransportURI(sound_url) + Play → poll for STOPPED → restore. |
+| Trigger from KNX / Player block | LBS 22000 input `PlaySound` (E23) | Writes alphabetical index → `_action_play_sound` → tries native `AudioClip.LoadAudioClip` first → falls back to snapshot/play/restore on failure. |
+| Native announcement (S2) | `AudioClip.LoadAudioClip` SOAP at `/AudioClip/Control` | Service `urn:schemas-sonos-com:service:AudioClip:1`. `ClipType=CUSTOM` + `StreamUrl` makes Sonos fetch the audio and play it on top of the current source — ducking + auto-resume handled by the player firmware. The same service Home Assistant's `announce: true` uses on modern hardware. |
 | Cross-LBS URL resolution | `get_sound_url` module-level helper | Returns `http://<hs-ip>:<admin-port>/sounds/<id>/<filename>` using the Admin's bound port. |
-| Snapshot / restore | `_snapshot_transport` + `_restore_transport` | Captures CurrentURI + metadata, RelTime, TransportState, Volume, Mute. After the clip ends restores via SetAVTransportURI → Seek(REL_TIME) → SetVolume → SetMute → Play (only if the snapshot was PLAYING). Radio-stream Seek rejection (UPnP 711) is ignored — radio resumes "from now" rather than the original timestamp. |
+| Fallback for S1 / older firmware | `_snapshot_transport` + `_wait_until_stopped` + `_restore_transport` | Captures CurrentURI + metadata, RelTime, TransportState, Volume, Mute. After the clip ends restores via SetAVTransportURI → Seek(REL_TIME) → SetVolume → SetMute → Play (only if the snapshot was PLAYING). Radio-stream Seek rejection (UPnP 711) is ignored — radio resumes "from now" rather than the original timestamp. |
 
 ## Group presets
 

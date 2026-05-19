@@ -113,6 +113,25 @@ ENV_SEEK_REL_TIME = (
     "<InstanceID>0</InstanceID><Unit>REL_TIME</Unit>"
     "<Target>{pos}</Target></u:Seek></s:Body></s:Envelope>"
 )
+# Sonos S2 native announcement. Plays the clip on top of whatever's
+# already playing — Sonos handles ducking + automatic resume.
+# ClipType=CUSTOM with a StreamUrl tells the player to fetch and play
+# our arbitrary audio file. AppId is a reverse-DNS identifier the
+# player uses internally to track outstanding clips; the exact string
+# doesn't affect playback. Priority=HIGH ensures the clip overrides
+# any lower-priority audio.
+ENV_LOAD_AUDIO_CLIP = (
+    '<?xml version="1.0" encoding="utf-8"?>'
+    '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">'
+    '<s:Body><u:LoadAudioClip xmlns:u="urn:schemas-sonos-com:service:AudioClip:1">'
+    "<InstanceID>0</InstanceID>"
+    "<AppId>com.gira.homeserver-sonos</AppId>"
+    "<Name>{name}</Name>"
+    "<ClipType>CUSTOM</ClipType>"
+    "<Priority>HIGH</Priority>"
+    "<StreamUrl>{url}</StreamUrl>"
+    "</u:LoadAudioClip></s:Body></s:Envelope>"
+)
 ENV_SET_URI = (
     '<?xml version="1.0" encoding="utf-8"?>'
     '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">'
@@ -437,19 +456,20 @@ def _lookup_station_via_admin(idx_or_name):
     return None
 
 
-def _admin_sound_url(idx_or_name):
-    """Resolve a sound index/name into the Admin's HTTP serve URL.
-    Returns '' when Admin isn't loaded, the sound doesn't exist, or
-    the Admin HTTP server hasn't bound a port yet. The Player passes
-    this URL straight to ``SetAVTransportURI`` — Sonos fetches the
-    audio bytes from the Admin's HTTP listener."""
+def _admin_sound_record(idx_or_name):
+    """Resolve a sound index/name into ``{"name", "url"}`` so the
+    Player can build a native AudioClip envelope (which carries both
+    the StreamUrl and a display Name) without two Admin calls. Returns
+    None when Admin isn't loaded, the sound doesn't exist, or the
+    Admin HTTP server hasn't bound a port yet."""
     for mod_name, mod in list(sys.modules.items()):
         if mod is None:
             continue
         if "sonos_admin" in mod_name or "hsl3_22001" in mod_name:
-            fn = getattr(mod, "get_sound_url", None)
+            get_url = getattr(mod, "get_sound_url", None)
+            get_rec = getattr(mod, "get_sound", None)
             ref = getattr(mod, "_admin_instance_ref", None)
-            if not (callable(fn) and ref):
+            if not (callable(get_url) and callable(get_rec) and ref):
                 continue
             try:
                 inst = ref.get("instance")
@@ -457,12 +477,14 @@ def _admin_sound_url(idx_or_name):
                     continue
                 port = getattr(inst, "listener_port", 0) or 0
                 lan_ip = _get_local_lan_ip()
-                url = fn(idx_or_name, lan_ip, port)
-                if url:
-                    return url
+                url = get_url(idx_or_name, lan_ip, port)
+                if not url:
+                    continue
+                rec = get_rec(idx_or_name) or {}
+                return {"name": rec.get("name", ""), "url": url}
             except Exception:
                 pass
-    return ""
+    return None
 
 
 def _admin_station_count():
@@ -486,10 +508,18 @@ def _admin_station_count():
 SERVICE_PATHS = {
     "AVTransport":      "/MediaRenderer/AVTransport/Control",
     "RenderingControl": "/MediaRenderer/RenderingControl/Control",
+    # Sonos S2's native announcement service. Plays a clip "on top of"
+    # the current source — the player ducks / pauses music, plays the
+    # notification, then resumes automatically. Equivalent to Home
+    # Assistant's `play_media announce: true`. Older S1 hardware
+    # doesn't expose this service, in which case `_action_play_sound`
+    # falls back to the snapshot/restore code path.
+    "AudioClip":        "/AudioClip/Control",
 }
 SERVICE_TYPES = {
     "AVTransport":      "urn:schemas-upnp-org:service:AVTransport:1",
     "RenderingControl": "urn:schemas-upnp-org:service:RenderingControl:1",
+    "AudioClip":        "urn:schemas-sonos-com:service:AudioClip:1",
 }
 EVENT_PATHS = {
     "av": "/MediaRenderer/AVTransport/Event",
@@ -1396,51 +1426,60 @@ class LogicModule:
     # ----- Sound notifications ---------------------------------------------
 
     def _action_play_sound(self, spec):
-        """Play a notification clip from the Admin sounds library and
-        restore whatever was playing afterwards.
+        """Play a notification clip from the Admin sounds library —
+        equivalent to Home Assistant's Sonos ``announce: true``.
 
-        The standard Sonos snapshot/restore pattern:
+        Modern Sonos firmware (S2) exposes a native announcement
+        service (``AudioClip.LoadAudioClip``) that plays the clip on
+        top of whatever is playing and resumes automatically when the
+        clip ends — no snapshot needed, no audible interruption. This
+        is the primary path.
 
-          1. Snapshot CurrentURI + metadata (GetMediaInfo), position
-             (GetPositionInfo), state (GetTransportInfo), Volume, Mute.
-          2. SetAVTransportURI(sound_url) + Play.
-          3. Poll TransportState until STOPPED (or hit the cap).
-          4. SetAVTransportURI back to the snapshotted CurrentURI +
-             metadata. Seek to the saved REL_TIME for seekable sources
-             (queues / files); radio streams ignore Seek which is fine.
-             Restore Volume + Mute. Re-issue Play only if the snapshot
-             was PLAYING.
+        Older S1 hardware doesn't have the AudioClip service and
+        returns a SOAP fault. In that case we fall back to the
+        snapshot/restore pattern: capture CurrentURI + metadata +
+        position + transport state + Volume + Mute, play the clip via
+        ``SetAVTransportURI`` + ``Play``, poll ``TransportState`` until
+        ``STOPPED``, then restore everything.
 
         Runs in the worker thread spawned by `_run_control_threaded` so
-        the polling loop never blocks node context."""
-        url = _admin_sound_url(spec)
-        if not url:
+        the polling loop in the fallback path never blocks node context.
+        """
+        sound = _admin_sound_record(spec)
+        if not sound or not sound.get("url"):
             self.fw.run_in_context(
                 self._write_error,
                 ("SOUND_NOT_FOUND: {}".format(spec),),
             )
             return
+        url = sound["url"]
+        name = sound.get("name") or "clip"
 
+        # Primary path — native Sonos announcement. AudioClip absent on
+        # S1 hardware returns HTTP 404 or a SOAP fault; both surface as
+        # ok=False from _soap, triggering the fallback below.
+        env_clip = ENV_LOAD_AUDIO_CLIP \
+            .replace("{name}", _xml_escape(name)) \
+            .replace("{url}",  _xml_escape(url))
+        ok, _b, _err = self._soap("AudioClip", "LoadAudioClip", env_clip)
+        if ok:
+            # The service handles ducking + auto-resume — we're done.
+            return
+
+        # Fallback for S1 / older firmware: snapshot, play, restore.
         snapshot = self._snapshot_transport()
-
-        # Step 2: play the clip.
-        env = ENV_SET_URI.replace("{uri}", _xml_escape(url)).replace("{meta}", "")
-        ok, _b, err = self._soap("AVTransport", "SetAVTransportURI", env)
+        env_set = ENV_SET_URI.replace("{uri}", _xml_escape(url)).replace("{meta}", "")
+        ok, _b, err = self._soap("AVTransport", "SetAVTransportURI", env_set)
         if not ok:
             self.fw.run_in_context(self._write_error, (err or "SOUND_SETURI_FAILED",))
             return
         ok, _b, err = self._soap("AVTransport", "Play", ENV_PLAY)
         if not ok:
             self.fw.run_in_context(self._write_error, (err or "SOUND_PLAY_FAILED",))
-            # Best-effort restore even if Play failed.
             self._restore_transport(snapshot)
             return
-
-        # Step 3: wait for the clip to finish. Sonos transitions to
-        # STOPPED at end-of-file for SetAVTransportURI'd clips.
+        # Sonos transitions to STOPPED at end-of-file for SetAVTransportURI'd clips.
         self._wait_until_stopped(timeout_s=120)
-
-        # Step 4: restore the previous source.
         self._restore_transport(snapshot)
 
     def _snapshot_transport(self):

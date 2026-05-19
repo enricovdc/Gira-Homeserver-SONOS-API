@@ -63,11 +63,13 @@ firmware **4.13+** (HSL3 / Python 3.9 logic-module SDK).
   master's playback.
 - **Sounds library.** Upload notification clips (doorbell, alarm, TTS
   recordings) via the Admin UI. The Player block's `PlaySound` input
-  snapshots whatever was playing (preset, queue position, volume,
-  mute), plays the clip via Sonos's native `SetAVTransportURI` +
-  `Play`, and restores the source when the clip finishes. The library
-  starts empty — drop in any MP3 / WAV / AAC / OGG / FLAC up to 2 MB.
-- **94 unit tests** with a stubbed `Hsl3Framework`, runnable in CI.
+  invokes Sonos's native `AudioClip.LoadAudioClip` service on S2
+  firmware — same path Home Assistant's `announce: true` uses — so the
+  player ducks the music, plays the clip, and resumes automatically.
+  On S1 hardware (no AudioClip service) it falls back to a snapshot /
+  play / restore cycle. Library starts empty; drop in any MP3 / WAV /
+  AAC / OGG / FLAC up to 2 MB.
+- **95 unit tests** with a stubbed `Hsl3Framework`, runnable in CI.
 
 ## Repository layout
 
@@ -136,7 +138,7 @@ on a machine that has the SDK.
 python3 tests/test_logic_modules.py
 ```
 
-94 tests covering: pure helpers (SOAP fault extraction, NOTIFY parsing,
+95 tests covering: pure helpers (SOAP fault extraction, NOTIFY parsing,
 URI normalisation, play-mode composition, transport-actions parsing,
 iso-8859-15 encoding), the
 `LogicModule` IO contract (string outputs are bytes, numeric outputs

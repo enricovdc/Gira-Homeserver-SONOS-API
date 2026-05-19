@@ -1385,11 +1385,67 @@ class TestPlayerStationFromAdmin(unittest.TestCase):
         lm._active_station = 0
         lm._action_step_preset(-1); self.assertEqual(calls[-1], 3)
 
-    def test_action_play_sound_snapshots_and_restores(self):
-        """PlaySound dispatches SetAVTransportURI(sound_url) + Play,
-        polls for STOPPED, then puts the previous source back. Verifies
-        the SOAP sequence and that Volume / Mute / position / play
-        state are restored from the snapshot."""
+    def test_action_play_sound_uses_native_audioclip_when_available(self):
+        """The primary path on modern S2 firmware is the native
+        AudioClip service — single SOAP call, Sonos handles ducking +
+        auto-resume internally. Verifies the Player only dispatches
+        LoadAudioClip when the service accepts the call, and skips
+        the snapshot / restore SOAP traffic entirely."""
+        upload_bytes = b"RIFF\x24\x00\x00\x00WAVEfmt fake"
+        for mod_name, mod in list(sys.modules.items()):
+            if mod is None:
+                continue
+            if "sonos_admin" in mod_name and hasattr(mod, "_sounds"):
+                with mod._registry_lock:
+                    mod._sounds.clear()
+                    mod._sounds["snd_1"] = {
+                        "id": "snd_1", "name": "Doorbell",
+                        "filename": "doorbell.wav",
+                        "mime": "audio/wav", "source": "uploaded",
+                        "size": len(upload_bytes),
+                        "_data": upload_bytes,
+                    }
+                ref = getattr(mod, "_admin_instance_ref", None)
+                if ref is not None:
+                    class _FakeAdmin:
+                        listener_port = 8080
+                    ref["instance"] = _FakeAdmin()
+        fw = StubFramework()
+        lm = self.player.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._host = "10.0.0.5"
+        calls = []
+        def fake_soap(service, action, envelope):
+            calls.append((service, action, envelope))
+            return (True, "", "")
+        lm._soap = fake_soap
+        # No real polling required — native path doesn't poll.
+        original_sleep = self.player.time.sleep
+        self.player.time.sleep = lambda *_a, **_kw: None
+        try:
+            lm._action_play_sound(1)
+        finally:
+            self.player.time.sleep = original_sleep
+        services = [s for (s, _a, _e) in calls]
+        actions = [a for (_s, a, _e) in calls]
+        # Exactly one SOAP call — to AudioClip.LoadAudioClip.
+        self.assertEqual(actions, ["LoadAudioClip"])
+        self.assertEqual(services, ["AudioClip"])
+        # And the envelope carries the sound URL + display name.
+        env = calls[0][2]
+        self.assertIn("doorbell.wav", env)
+        self.assertIn(":8080/", env)
+        self.assertIn("<Name>Doorbell</Name>", env)
+        self.assertIn("<ClipType>CUSTOM</ClipType>", env)
+        # NO snapshot/restore SOAP issued.
+        self.assertNotIn("GetMediaInfo", actions)
+        self.assertNotIn("SetAVTransportURI", actions)
+
+    def test_action_play_sound_falls_back_to_snapshot_restore_on_s1(self):
+        """Older S1 firmware doesn't expose AudioClip — the service
+        responds with HTTP 404 / SOAP fault. The Player must then
+        snapshot, play via SetAVTransportURI + Play, poll for
+        STOPPED, and restore."""
         # Seed an Admin sound in every loaded admin module so
         # _admin_sound_url resolves.
         upload_bytes = b"RIFF\x24\x00\x00\x00WAVEfmt fake-bytes"
@@ -1423,6 +1479,9 @@ class TestPlayerStationFromAdmin(unittest.TestCase):
         poll_count = {"n": 0}
         def fake_soap(service, action, envelope):
             calls.append((service, action, envelope))
+            # Simulate S1 hardware: AudioClip service rejected.
+            if action == "LoadAudioClip":
+                return (False, "<UPnPError><errorCode>401</errorCode></UPnPError>", "401")
             if action == "GetMediaInfo":
                 return (True,
                         "<CurrentURI>x-sonosapi-stream:s24939</CurrentURI>"
