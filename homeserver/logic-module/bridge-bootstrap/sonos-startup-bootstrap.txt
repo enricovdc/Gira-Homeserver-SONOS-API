@@ -1,0 +1,83 @@
+Sonos bridge startup logic block
+================================
+
+This file describes the **one logic block** the integrator must add to
+the HS Experte project to auto-launch the Node bridge on every
+HomeServer boot, when using deployment path B (file deployment +
+Systemkommando).
+
+For deployment path A (Programmpaket), this block is not needed — the
+Programmpaket auto-start handles it.
+
+----------------------------------------------------------------------
+Logic block: "sonos.startup.bootstrap"
+----------------------------------------------------------------------
+
+Trigger
+  Event: HomeServer-Start ("Start des HomeServers")
+  Also: every 5 minutes (heartbeat — restarts bridge if it crashed)
+
+Actions (in sequence)
+  1. Aktion: Systemkommando ausführen
+     Command: sh /data/projects/<project>/files/start-bridge.sh
+              (adjust the path to wherever the Experte deploys files
+               in your version)
+     Run as: same user as the HomeServer process (default)
+     Timeout: 15 s
+     Capture output: yes (writes stdout/stderr to a string data point
+                          named `sonos.bridge.lastStartOutput` so it
+                          can be inspected from the visualisation)
+
+  2. Aktion: HTTP-Request senden
+     Host: 127.0.0.1
+     Port: 8080
+     Method: GET
+     Path: /health
+     Timeout: 3 s
+     On 200 response: write `sonos.bridge.running = true`.
+     On any error / non-200: write `sonos.bridge.running = false`.
+
+  3. Conditional (only if sonos.bridge.running == false):
+     Aktion: Wait 5 s, then re-execute step 1.
+     (Optional — useful for slow startup on weaker HomeServer hardware.)
+
+Outputs
+  sonos.bridge.running          boolean — current state
+  sonos.bridge.lastStartOutput  string  — stdout of the start script
+  sonos.bridge.lastStartAt      string  — ISO timestamp of last attempt
+
+----------------------------------------------------------------------
+Verifying the block works
+----------------------------------------------------------------------
+
+After downloading the project:
+
+1. In the Experte, open the visualisation page that displays the
+   `sonos.bridge.*` data points (the configuration page at
+   `visualisation/config-page.html` shows them).
+2. Within ~30 s of boot, `sonos.bridge.running` should flip to true and
+   `sonos.bridge.lastStartOutput` should show:
+     "Bridge running as pid NNNN; logs at /var/lib/sonos-bridge/bridge.log
+      Open http://<hs-ip>:8080/ to configure."
+
+If it doesn't:
+
+- Open `sonos.bridge.lastStartOutput` and read the error message. Common
+  causes: Node not installed, working directory not writable, port 8080
+  already in use.
+- Try running the command manually from the Experte's *Systemkommando
+  testen* dialog if available.
+
+----------------------------------------------------------------------
+Hot-reload after editing bundle.js
+----------------------------------------------------------------------
+
+When the bundle file is updated (e.g. after pulling a new release):
+
+1. Re-import `dist/sonos-bridge.bundle.js` into the Experte project.
+2. Download to the HomeServer.
+3. The start script auto-detects that the source bundle is newer than
+   the copy in the working directory and overwrites it. The 5-minute
+   heartbeat re-launches the bridge with the new code.
+4. To force an immediate reload: manually trigger the
+   `sonos.startup.bootstrap` logic block from the Experte.

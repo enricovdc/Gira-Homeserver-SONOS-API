@@ -68,10 +68,34 @@ simple responses. This project provides:
 
 ---
 
-## Quick start — install on the HomeServer
+## Install modes
 
-The recommended deployment is **directly on the HomeServer**. SSH into the
-HomeServer as root and run:
+Three modes, in order of "user effort to install":
+
+| Mode | What you import | Effort | Features |
+| --- | --- | --- | --- |
+| **A. Experte-only bridge install** | HS Experte project containing `dist/sonos-bridge.bundle.js` + `start-bridge.sh` | Import the project, click *Download to HomeServer*. Done. | Full bridge: web admin UI, SSDP discovery, UPnP events, webhook push |
+| **B. Pure HSL logic module** | Same Experte project, **no** Node bundle | Set up data points + actions + receive parsers as documented | Core control, radio, status, UPnP events; no SSDP, no web admin |
+| **C. SSH systemd install** | This git repo on the HomeServer | `git clone` + `homeserver/install/install.sh` | Full bridge, hardened systemd unit, journal logs |
+
+Mode A is the recommended path for most integrators because it requires
+**no SSH access** to the HomeServer — the Experte project ships the
+self-contained Node bundle and a startup script, and the HomeServer
+deploys + auto-launches the bridge as part of the normal project
+download. See
+[homeserver/logic-module/bridge-bootstrap/README.md](homeserver/logic-module/bridge-bootstrap/README.md).
+
+Mode B is the fallback when the HomeServer firmware lacks the
+deployment primitives that Mode A uses (file write from logic +
+external command execution). See
+[homeserver/logic-module/INSTALL.md](homeserver/logic-module/INSTALL.md).
+
+Mode C is the traditional "install a service on a Linux box" path,
+documented in case you prefer it.
+
+## Mode C — SSH systemd install
+
+SSH into the HomeServer as root and run:
 
 ```sh
 git clone <this-repo> /tmp/sonos-bridge

@@ -7,4 +7,6 @@ config.json
 .DS_Store
 coverage/
 .nyc_output/
-dist/
+# dist/ — kept in repo so the HS Experte import can ship the bundled
+# bridge without a separate build step. Comment out if you prefer to
+# build before each release.

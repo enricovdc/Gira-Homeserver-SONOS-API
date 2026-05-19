@@ -11,6 +11,7 @@
     "start": "node src/server.js",
     "test": "node --test test/*.test.js",
     "test:watch": "node --test --watch test/*.test.js",
+    "bundle": "node scripts/bundle.js",
     "lint": "node -e \"require('fs').readdirSync('src',{recursive:true}).filter(f=>f.endsWith('.js')).forEach(f=>require('./src/'+f))\" && echo lint-ok"
   },
   "keywords": [

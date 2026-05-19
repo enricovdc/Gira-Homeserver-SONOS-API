@@ -1,0 +1,340 @@
+<!doctype html>
+<!--
+  Sonos configuration page for the Gira HomeServer visualisation.
+
+  This page is embedded inside the HomeServer's own visualisation (see
+  ../visualisation/README.md for embedding instructions). It reads and
+  writes the `sonos.*` data points defined in
+  ../experte-blocks/data-points.md, so end users can add/edit players
+  and stations at runtime without going into the Experte.
+
+  The page uses ONLY the HomeServer's own JSON RPC interface
+  (typically /endpoints/quad/datapoint or similar — adjust the
+  `BASE_PATH` below to match your HomeServer firmware's URL).
+
+  This page is intentionally framework-free and inline-styled so it
+  works in any HS visualisation HTML container.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sonos · Configuration</title>
+<style>
+:root { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+body { margin: 0; background: #f5f6f8; color: #1a1f2c; padding: 1rem; }
+h1 { font-size: 1.1rem; margin: 0 0 0.75rem; }
+section { background: #fff; border: 1px solid #d7dce3; border-radius: 8px;
+          margin-bottom: 1rem; padding: 0.75rem 1rem; }
+section h2 { margin: 0 0 0.5rem; font-size: 1rem; }
+table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+th, td { text-align: left; padding: 0.4rem 0.5rem; border-bottom: 1px solid #eef0f3; }
+th { background: #f7f8fa; font-weight: 600; }
+input { width: 100%; padding: 0.3rem 0.4rem; font: inherit;
+        border: 1px solid #cdd3dc; border-radius: 4px; box-sizing: border-box; }
+button { padding: 0.35rem 0.8rem; font: inherit; background: #1f6feb; color: #fff;
+         border: 0; border-radius: 4px; cursor: pointer; }
+button.danger { background: #c0392b; }
+button.secondary { background: #6b7280; }
+.row { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.5rem; flex-wrap: wrap; }
+.muted { color: #6b7280; font-size: 0.85rem; }
+.pill { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 0.75rem; font-weight: 600; }
+.pill.online  { background: #def7ec; color: #03543e; }
+.pill.offline { background: #fde8e8; color: #9b1c1c; }
+.pill.playing { background: #e1effe; color: #1e429f; }
+#status { font-size: 0.85rem; color: #6b7280; }
+#err    { color: #c0392b; font-size: 0.85rem; }
+</style>
+</head>
+<body>
+<h1>Sonos · Configuration</h1>
+<div id="status" class="muted">Loading…</div>
+<div id="err"></div>
+
+<section>
+  <h2>Players</h2>
+  <table id="players">
+    <thead><tr>
+      <th style="width:25%">Name</th>
+      <th style="width:25%">Host (IP)</th>
+      <th style="width:20%">State</th>
+      <th style="width:15%">Vol</th>
+      <th style="width:15%">Actions</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table>
+  <div class="row">
+    <input id="pn" placeholder="name (e.g. livingroom)" style="max-width: 200px">
+    <input id="ph" placeholder="host (e.g. 192.168.1.50)" style="max-width: 200px">
+    <button id="add-player">Add player</button>
+    <span class="muted">(name must match a `sonos.&lt;name&gt;.*` group of data points pre-created in Experte)</span>
+  </div>
+</section>
+
+<section>
+  <h2>Radio stations</h2>
+  <table id="stations">
+    <thead><tr>
+      <th style="width:10%">Idx</th>
+      <th style="width:30%">Name</th>
+      <th>Stream URI</th>
+      <th style="width:15%">Actions</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table>
+  <div class="row">
+    <input id="si" type="number" min="1" placeholder="idx" style="max-width: 80px">
+    <input id="sn" placeholder="name" style="max-width: 200px">
+    <input id="su" placeholder="stream URL — http://… or x-rincon-mp3radio://…">
+    <button id="add-station">Add station</button>
+  </div>
+</section>
+
+<section>
+  <h2>Diagnostics</h2>
+  <div class="row">
+    <span class="muted">Subscribed: <span id="dsub">–</span></span>
+    <span class="muted">Last NOTIFY: <span id="dnot">–</span></span>
+    <span class="muted">Callback base: <span id="dcb">–</span></span>
+    <button id="resub" class="secondary">Re-subscribe all</button>
+    <button id="refresh" class="secondary">Refresh now</button>
+  </div>
+</section>
+
+<section>
+  <h2>Help</h2>
+  <p class="muted">If a value won't update, check the corresponding data point
+    name in the HS Experte (see <code>experte-blocks/data-points.md</code> in
+    the project documentation). The page assumes the namespace
+    <code>sonos.&lt;name&gt;.*</code> and <code>sonos.station.&lt;n&gt;.*</code>.</p>
+</section>
+
+<script>
+// ────────────────────────────────────────────────────────────────────
+// Configuration — adjust to match your HS firmware
+// ────────────────────────────────────────────────────────────────────
+//
+// The HomeServer exposes a data-point read/write API on a path that
+// varies by firmware version. The common paths are:
+//   /endpoints/datapoints/<name>      (HS 4.10+)
+//   /quad/json/dp/<name>              (older HS)
+//   /hslf/json/dp/<name>              (alternate)
+//
+// Open the network tab in the HS visualisation runtime once, click any
+// widget that reads/writes a data point, and copy the URL pattern here.
+const READ_URL  = (name) => '/endpoints/datapoints/' + encodeURIComponent(name);
+const WRITE_URL = (name) => '/endpoints/datapoints/' + encodeURIComponent(name);
+const LIST_URL  = (prefix) => '/endpoints/datapoints?prefix=' + encodeURIComponent(prefix);
+//
+// Maximum index we look for when scanning for stations / players.
+const MAX_PLAYERS  = 16;
+const MAX_STATIONS = 32;
+// Player names this UI knows how to manage — auto-discovered from data
+// points whose host is set. If your data points were not pre-created
+// for a player, add a row in Experte first, then the UI will pick it up.
+// ────────────────────────────────────────────────────────────────────
+
+const $ = (id) => document.getElementById(id);
+function status(s) { $('status').textContent = s; }
+function err(s)    { $('err').textContent = s; setTimeout(() => $('err').textContent = '', 4000); }
+function esc(s) {
+  return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
+async function readDp(name) {
+  try {
+    const r = await fetch(READ_URL(name), { credentials: 'same-origin' });
+    if (!r.ok) return null;
+    const data = await r.json().catch(() => null);
+    if (data == null) return null;
+    // HS firmware variants return either {value: x} or just x
+    return (data && Object.prototype.hasOwnProperty.call(data, 'value')) ? data.value : data;
+  } catch { return null; }
+}
+
+async function writeDp(name, value) {
+  const r = await fetch(WRITE_URL(name), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify({ value })
+  });
+  if (!r.ok) throw new Error('Write ' + name + ' failed: HTTP ' + r.status);
+}
+
+async function discoverPlayers() {
+  // Try listing the prefix first (HS supports it on most firmware).
+  try {
+    const r = await fetch(LIST_URL('sonos.'), { credentials: 'same-origin' });
+    if (r.ok) {
+      const list = await r.json();
+      const names = new Set();
+      for (const item of (list.items || list || [])) {
+        const m = (item.name || item).match(/^sonos\.([^.]+)\.host$/);
+        if (m && m[1] !== 'station' && m[1] !== 'callbackBase' && m[1] !== 'diag' && m[1] !== 'config') names.add(m[1]);
+      }
+      return Array.from(names);
+    }
+  } catch { /* fall through */ }
+  // Fallback: probe a fixed list of common names.
+  const probes = ['livingroom', 'kitchen', 'bathroom', 'bedroom', 'office', 'garden',
+                  'hallway', 'diningroom', 'playroom', 'studio', 'guestroom', 'garage'];
+  const found = [];
+  for (const name of probes) {
+    const host = await readDp('sonos.' + name + '.host');
+    if (host !== null) found.push(name);
+  }
+  return found;
+}
+
+async function discoverStations() {
+  const out = [];
+  for (let i = 1; i <= MAX_STATIONS; i++) {
+    const [name, uri] = await Promise.all([
+      readDp('sonos.station.' + i + '.name'),
+      readDp('sonos.station.' + i + '.uri')
+    ]);
+    if (name || uri) out.push({ index: i, name: name || '', uri: uri || '' });
+  }
+  return out;
+}
+
+async function readPlayerState(name) {
+  const [host, state, volume, mute, title, online, activeStation] = await Promise.all([
+    readDp('sonos.' + name + '.host'),
+    readDp('sonos.' + name + '.state'),
+    readDp('sonos.' + name + '.volume'),
+    readDp('sonos.' + name + '.mute'),
+    readDp('sonos.' + name + '.title'),
+    readDp('sonos.' + name + '.online'),
+    readDp('sonos.' + name + '.activeStation')
+  ]);
+  return { name, host, state, volume, mute, title, online, activeStation };
+}
+
+async function renderPlayers() {
+  const names = await discoverPlayers();
+  const states = await Promise.all(names.map(readPlayerState));
+  const tbody = document.querySelector('#players tbody');
+  tbody.innerHTML = '';
+  for (const p of states) {
+    const tr = document.createElement('tr');
+    const stateLabel = p.online === false ? 'offline'
+                     : (p.state || 'unknown');
+    const pillClass = p.online === false ? 'offline'
+                    : (p.state === 'PLAYING' ? 'playing' : 'online');
+    tr.innerHTML =
+      '<td>' + esc(p.name) + '</td>' +
+      '<td><input data-dp="sonos.' + esc(p.name) + '.host" value="' + esc(p.host || '') + '"></td>' +
+      '<td><span class="pill ' + pillClass + '">' + esc(stateLabel) + '</span></td>' +
+      '<td>' + (p.volume != null ? p.volume : '–') + (p.mute ? ' 🔇' : '') + '</td>' +
+      '<td><button class="danger" data-del-player="' + esc(p.name) + '">Clear</button></td>';
+    tbody.appendChild(tr);
+  }
+  if (states.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" class="muted">No players configured yet. Pre-create data points in Experte (see data-points.md), then add the player name below.</td></tr>';
+  }
+}
+
+async function renderStations() {
+  const stations = await discoverStations();
+  const tbody = document.querySelector('#stations tbody');
+  tbody.innerHTML = '';
+  for (const s of stations) {
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td>' + s.index + '</td>' +
+      '<td><input data-dp="sonos.station.' + s.index + '.name" value="' + esc(s.name) + '"></td>' +
+      '<td><input data-dp="sonos.station.' + s.index + '.uri"  value="' + esc(s.uri) + '"></td>' +
+      '<td><button class="danger" data-del-station="' + s.index + '">Clear</button></td>';
+    tbody.appendChild(tr);
+  }
+}
+
+async function renderDiag() {
+  const [sub, notAt, cb] = await Promise.all([
+    readDp('sonos.diag.subscribedCount'),
+    readDp('sonos.diag.lastNotifyAt'),
+    readDp('sonos.callbackBase')
+  ]);
+  $('dsub').textContent = sub == null ? '–' : sub;
+  $('dnot').textContent = notAt || '–';
+  $('dcb').textContent  = cb || '–';
+}
+
+async function refreshAll() {
+  status('Loading…');
+  try {
+    await renderPlayers();
+    await renderStations();
+    await renderDiag();
+    status('Updated ' + new Date().toLocaleTimeString());
+  } catch (e) { err(e.message); status(''); }
+}
+
+document.addEventListener('change', async (ev) => {
+  const t = ev.target;
+  if (t.tagName !== 'INPUT' || !t.dataset.dp) return;
+  try {
+    await writeDp(t.dataset.dp, t.value);
+    status('Saved ' + t.dataset.dp);
+  } catch (e) { err(e.message); }
+});
+
+document.addEventListener('click', async (ev) => {
+  const t = ev.target;
+  if (t.tagName !== 'BUTTON') return;
+  try {
+    if (t.dataset.delPlayer) {
+      await writeDp('sonos.' + t.dataset.delPlayer + '.host', '');
+      refreshAll();
+    }
+    if (t.dataset.delStation) {
+      const i = t.dataset.delStation;
+      await Promise.all([
+        writeDp('sonos.station.' + i + '.name', ''),
+        writeDp('sonos.station.' + i + '.uri', '')
+      ]);
+      refreshAll();
+    }
+  } catch (e) { err(e.message); }
+});
+
+$('add-player').addEventListener('click', async () => {
+  const name = $('pn').value.trim(), host = $('ph').value.trim();
+  if (!name || !host) return err('name and host required');
+  if (!/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(name)) return err('name: letters, digits, _, - only');
+  try {
+    await writeDp('sonos.' + name + '.host', host);
+    $('pn').value = ''; $('ph').value = '';
+    refreshAll();
+  } catch (e) { err(e.message + ' — did you pre-create the data points in Experte?'); }
+});
+
+$('add-station').addEventListener('click', async () => {
+  const i = parseInt($('si').value, 10), n = $('sn').value.trim(), u = $('su').value.trim();
+  if (!i || !n || !u) return err('index, name and URI required');
+  try {
+    await writeDp('sonos.station.' + i + '.name', n);
+    await writeDp('sonos.station.' + i + '.uri',  u);
+    $('si').value = ''; $('sn').value = ''; $('su').value = '';
+    refreshAll();
+  } catch (e) { err(e.message + ' — did you pre-create sonos.station.' + i + '.* in Experte?'); }
+});
+
+$('resub').addEventListener('click', async () => {
+  // The "resubscribe all" logic block is triggered by writing 1 to the
+  // bool data point `sonos.cmd.resubscribe`. Wire that logic block in
+  // Experte to fire `subscribe-av` and `subscribe-rc` for every player.
+  try { await writeDp('sonos.cmd.resubscribe', true); status('Triggered re-subscribe'); }
+  catch (e) { err(e.message + ' — does the data point sonos.cmd.resubscribe exist?'); }
+});
+
+$('refresh').addEventListener('click', refreshAll);
+
+refreshAll();
+setInterval(refreshAll, 10000);
+</script>
+</body>
+</html>
