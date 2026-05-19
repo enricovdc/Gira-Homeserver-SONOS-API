@@ -1060,6 +1060,72 @@ class TestSonosAdmin(unittest.TestCase):
         self.assertEqual(fw.outputs["DiscoveredPlayers"], b"")
         self.assertEqual(fw.outputs["LastDiscoveryCount"], 0.0)
 
+    def test_admin_player_defaults_get_set_persist(self):
+        """Player tunable defaults (PollInterval, SubTimeout, HttpTimeout,
+        CallbackBase) are settable via api_set_player_defaults, readable
+        via api_get_player_defaults and get_player_defaults(), and round-
+        trip through the retentive store."""
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        # Reset to the init values so the test is hermetic.
+        with self.mod._registry_lock:
+            self.mod._player_defaults.update({
+                "pollInterval": 60, "subTimeout": 1800,
+                "httpTimeout": 5, "callbackBase": "",
+            })
+        # Set new defaults via the API.
+        r = lm.api_set_player_defaults({
+            "pollInterval": 30,
+            "subTimeout":   600,
+            "httpTimeout":  8,
+            "callbackBase": "http://hs:8082/",
+        })
+        self.assertEqual(r["defaults"]["pollInterval"], 30)
+        self.assertEqual(r["defaults"]["subTimeout"],   600)
+        self.assertEqual(r["defaults"]["httpTimeout"],  8)
+        # Trailing slash stripped
+        self.assertEqual(r["defaults"]["callbackBase"], "http://hs:8082")
+
+        # api_get_player_defaults sees the new values.
+        g = lm.api_get_player_defaults()
+        self.assertEqual(g["defaults"]["pollInterval"], 30)
+
+        # Module-level helper returns the same snapshot.
+        snap = self.mod.get_player_defaults()
+        self.assertEqual(snap["pollInterval"], 30)
+        self.assertEqual(snap["callbackBase"], "http://hs:8082")
+
+        # Persistence — _sync_async should have written the dict via _persist.
+        self.assertIn("PersistedPlayerDefaults", fw.stores)
+        # Wipe and reload through _load_persisted; values must come back.
+        with self.mod._registry_lock:
+            self.mod._player_defaults.update({
+                "pollInterval": 60, "subTimeout": 1800,
+                "httpTimeout": 5, "callbackBase": "",
+            })
+        class _Slot:
+            def __init__(self, v): self.value = v
+        class _Store(dict):
+            def __getitem__(self, k): return _Slot(fw.stores.get(k, b""))
+        lm._load_persisted(_Store())
+        self.assertEqual(self.mod._player_defaults["pollInterval"], 30)
+        self.assertEqual(self.mod._player_defaults["callbackBase"], "http://hs:8082")
+
+    def test_admin_player_defaults_clamps_lower_bounds(self):
+        """Bad UI values can't break the integration — the same lower
+        bounds the Player module enforces are applied at the API layer."""
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm.api_set_player_defaults({"pollInterval": 1, "subTimeout": 1, "httpTimeout": 0})
+        d = self.mod.get_player_defaults()
+        # 0 means "use default value" → falls back to module init (60/1800/5)
+        # but values like 1 get clamped up to the floor.
+        self.assertGreaterEqual(d["pollInterval"], 10)
+        self.assertGreaterEqual(d["subTimeout"], 60)
+        self.assertGreaterEqual(d["httpTimeout"], 2)
+
     def test_admin_oauth_start_requires_full_config(self):
         fw = StubFramework()
         lm = self.mod.LogicModule(fw)
@@ -1360,6 +1426,63 @@ class TestPlayerStationFromAdmin(unittest.TestCase):
         # No SOAP traffic emitted — we bailed early with PLAYLIST_NO_UUID.
         self.assertEqual(called, [])
         self.assertEqual(fw.outputs["LastError"], b"PLAYLIST_NO_UUID")
+
+    def test_player_falls_back_to_admin_defaults_when_inputs_zero(self):
+        """When the Player block's tunable inputs are at init (0 / empty),
+        _reload_config picks them up from the Admin's _player_defaults
+        dict via the get_player_defaults() module-level helper."""
+        # Configure Admin-side defaults. The player helper walks
+        # sys.modules and returns the first matching admin module, so to
+        # keep the test hermetic we update every loaded admin module.
+        for mod_name, mod in list(sys.modules.items()):
+            if mod is None:
+                continue
+            if "sonos_admin" in mod_name and hasattr(mod, "_player_defaults"):
+                with mod._registry_lock:
+                    mod._player_defaults.update({
+                        "pollInterval": 25,
+                        "subTimeout":   900,
+                        "httpTimeout":  7,
+                        "callbackBase": "http://hs:8082",
+                    })
+        fw = StubFramework()
+        lm = self.player.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        inputs = make_player_inputs(
+            host="10.0.0.1",
+            PollInterval=0, SubTimeout=0, HttpTimeout=0, CallbackBase="",
+        )
+        lm._reload_config(inputs)
+        self.assertEqual(lm._poll_interval_s, 25)
+        self.assertEqual(lm._sub_timeout_s, 900)
+        self.assertEqual(lm._http_timeout_s, 7)
+        self.assertEqual(lm._callback_base, "http://hs:8082")
+
+    def test_player_input_overrides_admin_default(self):
+        """When the Player input is set (non-zero / non-empty), it wins
+        over the Admin default — local override always beats global."""
+        for mod_name, mod in list(sys.modules.items()):
+            if mod is None:
+                continue
+            if "sonos_admin" in mod_name and hasattr(mod, "_player_defaults"):
+                with mod._registry_lock:
+                    mod._player_defaults.update({
+                        "pollInterval": 25, "subTimeout": 900,
+                        "httpTimeout": 7, "callbackBase": "http://hs:8082",
+                    })
+        fw = StubFramework()
+        lm = self.player.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        inputs = make_player_inputs(
+            host="10.0.0.1",
+            PollInterval=120, SubTimeout=3600, HttpTimeout=10,
+            CallbackBase="http://override:9000",
+        )
+        lm._reload_config(inputs)
+        self.assertEqual(lm._poll_interval_s, 120)
+        self.assertEqual(lm._sub_timeout_s, 3600)
+        self.assertEqual(lm._http_timeout_s, 10)
+        self.assertEqual(lm._callback_base, "http://override:9000")
 
     def test_xml_escape_handles_uri_with_ampersand(self):
         """SetAVTransportURI URIs frequently contain & (cloud query params).

@@ -72,10 +72,10 @@
     <tr><td class="io-nr input center">E18</td><td class="io-name">Ungroup</td><td class="io-init center">0</td><td class="io-descr">Steigende Flanke loest diesen Player aus seiner aktuellen Zonengruppe.</td></tr>
     <tr><td class="io-nr input center">E19</td><td class="io-name">Resubscribe</td><td class="io-init center">0</td><td class="io-descr">Erneuert die UPnP Abonnements.</td></tr>
     <tr><td class="io-nr input center">E20</td><td class="io-name">VolStep</td><td class="io-init center">2</td><td class="io-descr">Schrittweite fuer VolUp und VolDown.</td></tr>
-    <tr><td class="io-nr input center">E21</td><td class="io-name">PollInterval</td><td class="io-init center">60</td><td class="io-descr">Status-Abfrageintervall in Sekunden.</td></tr>
-    <tr><td class="io-nr input center">E22</td><td class="io-name">SubTimeout</td><td class="io-init center">1800</td><td class="io-descr">UPnP Abonnement Timeout.</td></tr>
-    <tr><td class="io-nr input center">E23</td><td class="io-name">HttpTimeout</td><td class="io-init center">5</td><td class="io-descr">HTTP Anfrage Timeout in Sekunden.</td></tr>
-    <tr><td class="io-nr input center">E24</td><td class="io-name">CallbackBase</td><td class="io-init string center"></td><td class="io-descr">Callback Basis URL. Leer fuer automatische Erkennung.</td></tr>
+    <tr><td class="io-nr input center">E21</td><td class="io-name">PollInterval</td><td class="io-init center">60</td><td class="io-descr">Status-Abfrageintervall in Sekunden. Bei 0 wird der Wert aus der Admin-Webseite (Player Defaults) verwendet.</td></tr>
+    <tr><td class="io-nr input center">E22</td><td class="io-name">SubTimeout</td><td class="io-init center">1800</td><td class="io-descr">UPnP Abonnement Timeout. Bei 0 wird der Wert aus der Admin-Webseite verwendet.</td></tr>
+    <tr><td class="io-nr input center">E23</td><td class="io-name">HttpTimeout</td><td class="io-init center">5</td><td class="io-descr">HTTP Anfrage Timeout in Sekunden. Bei 0 wird der Wert aus der Admin-Webseite verwendet.</td></tr>
+    <tr><td class="io-nr input center">E24</td><td class="io-name">CallbackBase</td><td class="io-init string center"></td><td class="io-descr">Callback Basis URL. Leer = Admin-Vorgabe verwenden, sonst Auto-Erkennung anhand der HomeServer-LAN-IP.</td></tr>
   </table>
 </div>
 

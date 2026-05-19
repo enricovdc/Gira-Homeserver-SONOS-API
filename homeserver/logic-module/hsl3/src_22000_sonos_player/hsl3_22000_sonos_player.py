@@ -319,6 +319,26 @@ def _lookup_group_via_admin(spec):
     return None
 
 
+def _admin_player_defaults():
+    """Pull the Admin LBS's player tunable defaults (PollInterval,
+    SubTimeout, HttpTimeout, CallbackBase). Returns ``{}`` when Admin
+    isn't on the canvas or hasn't been initialised — the Player block
+    then uses its own input init values."""
+    for mod_name, mod in list(sys.modules.items()):
+        if mod is None:
+            continue
+        if "sonos_admin" in mod_name or "hsl3_22001" in mod_name:
+            fn = getattr(mod, "get_player_defaults", None)
+            if callable(fn):
+                try:
+                    d = fn()
+                    if isinstance(d, dict):
+                        return d
+                except Exception:
+                    pass
+    return {}
+
+
 def _lookup_station_via_admin(idx_or_name):
     """If the Sonos Admin LBS is loaded, ask it for the full station
     record (uri + metadata + name). Returns None when Admin isn't
@@ -817,11 +837,23 @@ class LogicModule:
         resolved = resolve_host_spec(self._host_spec)
         self._host = resolved or (self._host_spec if _is_ip_literal(self._host_spec) else "")
         self._vol_step = max(1, int(inputs["VolStep"].value or 2))
-        self._poll_interval_s = max(10, int(inputs["PollInterval"].value or 60))
-        self._sub_timeout_s = max(60, int(inputs["SubTimeout"].value or 1800))
+
+        # Tunables fall back to the Admin's player defaults when the
+        # input is left at its init value (0 / empty). Lets the
+        # integrator tune all Player blocks in one place via the Admin
+        # web UI without wiring four inputs per block.
+        defaults = _admin_player_defaults()
+        poll_in = int(inputs["PollInterval"].value or 0)
+        sub_in  = int(inputs["SubTimeout"].value or 0)
+        http_in = int(inputs["HttpTimeout"].value or 0)
+        self._poll_interval_s = max(10, poll_in or int(defaults.get("pollInterval") or 60))
+        self._sub_timeout_s   = max(60, sub_in  or int(defaults.get("subTimeout")   or 1800))
         self._renew_threshold_s = max(30, self._sub_timeout_s // 6)
-        self._http_timeout_s = max(2, int(inputs["HttpTimeout"].value or 5))
+        self._http_timeout_s  = max(2,  http_in or int(defaults.get("httpTimeout")  or 5))
+
         cb = to_str(inputs["CallbackBase"].value).strip().rstrip("/")
+        if not cb:
+            cb = (defaults.get("callbackBase") or "").strip().rstrip("/")
         if not cb:
             cb = "http://{}:{}".format(_get_local_lan_ip(), self._notify_port)
         self._callback_base = cb

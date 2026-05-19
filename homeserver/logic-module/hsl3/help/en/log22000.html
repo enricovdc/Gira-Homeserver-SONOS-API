@@ -78,10 +78,10 @@
     <tr><td class="io-nr input center">E18</td><td class="io-name">Ungroup</td><td class="io-init center">0</td><td class="io-descr">Rising edge — break THIS player out of its current zone group. Other group members keep playing on the master.</td></tr>
     <tr><td class="io-nr input center">E19</td><td class="io-name">Resubscribe</td><td class="io-init center">0</td><td class="io-descr">Rising edge clears UPnP subscriptions and re-subscribes.</td></tr>
     <tr><td class="io-nr input center">E20</td><td class="io-name">VolStep</td><td class="io-init center">2</td><td class="io-descr">Step size for VolUp and VolDown.</td></tr>
-    <tr><td class="io-nr input center">E21</td><td class="io-name">PollInterval</td><td class="io-init center">60</td><td class="io-descr">Status poll interval in seconds.</td></tr>
-    <tr><td class="io-nr input center">E22</td><td class="io-name">SubTimeout</td><td class="io-init center">1800</td><td class="io-descr">UPnP subscription timeout granted to the player.</td></tr>
-    <tr><td class="io-nr input center">E23</td><td class="io-name">HttpTimeout</td><td class="io-init center">5</td><td class="io-descr">HTTP request timeout in seconds.</td></tr>
-    <tr><td class="io-nr input center">E24</td><td class="io-name">CallbackBase</td><td class="io-init string center"></td><td class="io-descr">Callback base URL for UPnP. Leave empty for auto detection.</td></tr>
+    <tr><td class="io-nr input center">E21</td><td class="io-name">PollInterval</td><td class="io-init center">60</td><td class="io-descr">Status poll interval in seconds. Leave at 0 to use the Admin web UI&apos;s Player Defaults value.</td></tr>
+    <tr><td class="io-nr input center">E22</td><td class="io-name">SubTimeout</td><td class="io-init center">1800</td><td class="io-descr">UPnP subscription timeout granted to the player. Leave at 0 to use the Admin web UI&apos;s Player Defaults value.</td></tr>
+    <tr><td class="io-nr input center">E23</td><td class="io-name">HttpTimeout</td><td class="io-init center">5</td><td class="io-descr">HTTP request timeout in seconds. Leave at 0 to use the Admin web UI&apos;s Player Defaults value.</td></tr>
+    <tr><td class="io-nr input center">E24</td><td class="io-name">CallbackBase</td><td class="io-init string center"></td><td class="io-descr">Callback base URL for UPnP. Leave empty to use the Admin web UI&apos;s Player Defaults value, or fall through to auto-detection from the HomeServer&apos;s LAN IP.</td></tr>
   </table>
 </div>
 

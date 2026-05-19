@@ -80,7 +80,25 @@ _cloud = {
     "refreshToken": "",
     "expiresAt": 0,
 }
+# Defaults the Sonos Player block falls back to when its own tunable
+# inputs are left at the init value (0 / empty). Persisted across HS
+# restarts via the PersistedPlayerDefaults store. Edited from the
+# Admin web UI's "Player Defaults" section.
+_player_defaults = {
+    "pollInterval": 60,    # seconds
+    "subTimeout":   1800,  # seconds
+    "httpTimeout":  5,     # seconds
+    "callbackBase": "",    # empty = auto-detect from LAN IP
+}
 _admin_instance_ref = {"instance": None}   # Wrapped in dict so swap is atomic.
+
+
+def get_player_defaults():
+    """Return a snapshot copy of the player tunable defaults — used by
+    LBS 22000 to fall back when its own PollInterval / SubTimeout /
+    HttpTimeout / CallbackBase inputs are left at the init value."""
+    with _registry_lock:
+        return dict(_player_defaults)
 
 
 def _norm_mac(mac):
@@ -872,6 +890,21 @@ details.group-add .row { margin-top: 6px; }
   </section>
 
   <section>
+    <h2>Player Defaults</h2>
+    <p class="muted">Defaults the Sonos Player block falls back to when its own tunable inputs (PollInterval, SubTimeout, HttpTimeout, CallbackBase) are left at their init value. Setting them here once means you don't have to wire those inputs on every Player block.</p>
+    <div class="grid">
+      <label for="pd-poll">Status poll interval (seconds)</label><input id="pd-poll" type="number" min="10" step="1">
+      <label for="pd-sub">UPnP subscription timeout (seconds)</label><input id="pd-sub" type="number" min="60" step="1">
+      <label for="pd-http">HTTP timeout (seconds)</label><input id="pd-http" type="number" min="2" step="1">
+      <label for="pd-cb">Callback base URL (leave empty for auto)</label><input id="pd-cb" type="text" placeholder="http://&lt;homeserver-ip&gt;:8081">
+    </div>
+    <div class="row">
+      <button id="pd-save">Save defaults</button>
+      <span id="pd-state" class="muted"></span>
+    </div>
+  </section>
+
+  <section>
     <h2>Sonos Cloud (optional)</h2>
     <p class="muted">Configure OAuth credentials so a future LBS can use the Sonos Cloud Control API as a fallback when local SOAP is unavailable. Local SOAP remains the primary path.</p>
     <div class="grid">
@@ -899,6 +932,7 @@ details.group-add .row { margin-top: 6px; }
   <a href="/api/players">/api/players</a>
   <a href="/api/stations">/api/stations</a>
   <a href="/api/cloud">/api/cloud</a>
+  <a href="/api/player-defaults">/api/player-defaults</a>
   <a href="/tile.html">/tile.html</a>
 </div>
 </div>
@@ -1044,6 +1078,13 @@ async function refreshCloud() {
   document.getElementById('c-redirect').value = r.cloud.redirectBase || location.origin;
   document.getElementById('c-state').textContent =
     r.cloud.authorized ? 'Authorized; token expires in ' + r.cloud.expiresIn + 's' : 'Not authorized';
+}
+async function refreshPlayerDefaults() {
+  const r = await api('GET', '/api/player-defaults');
+  document.getElementById('pd-poll').value = r.defaults.pollInterval;
+  document.getElementById('pd-sub').value = r.defaults.subTimeout;
+  document.getElementById('pd-http').value = r.defaults.httpTimeout;
+  document.getElementById('pd-cb').value = r.defaults.callbackBase || '';
 }
 async function refreshDiag() {
   const r = await api('GET', '/api/info');
@@ -1265,7 +1306,7 @@ document.addEventListener('change', async (ev) => {
 
 async function refreshAll() {
   try { await refreshPlayers(); await refreshStations(); await refreshGroups();
-        await refreshCloud(); await refreshDiag(); }
+        await refreshPlayerDefaults(); await refreshCloud(); await refreshDiag(); }
   catch (e) { toast(e.message, true); }
 }
 document.addEventListener('change', async (ev) => {
@@ -1420,6 +1461,20 @@ document.getElementById('ns-add').addEventListener('click', async () => {
     refreshAll();
   } catch (e) { toast(e.message, true); }
 });
+document.getElementById('pd-save').addEventListener('click', async () => {
+  const body = {
+    pollInterval: parseInt(document.getElementById('pd-poll').value, 10) || 0,
+    subTimeout:   parseInt(document.getElementById('pd-sub').value,  10) || 0,
+    httpTimeout:  parseInt(document.getElementById('pd-http').value, 10) || 0,
+    callbackBase: document.getElementById('pd-cb').value.trim(),
+  };
+  try {
+    await api('PUT', '/api/player-defaults', body);
+    document.getElementById('pd-state').textContent = 'Saved';
+    setTimeout(() => { document.getElementById('pd-state').textContent = ''; }, 2000);
+    refreshPlayerDefaults();
+  } catch (e) { toast(e.message, true); }
+});
 document.getElementById('c-save').addEventListener('click', async () => {
   const body = {
     clientId: document.getElementById('c-id').value.trim(),
@@ -1562,6 +1617,8 @@ class _AdminHandler(BaseHTTPRequestHandler):
                 return self._send(200, self.server.admin.api_list_groups())
             if path == "/api/cloud":
                 return self._send(200, self.server.admin.api_get_cloud())
+            if path == "/api/player-defaults":
+                return self._send(200, self.server.admin.api_get_player_defaults())
             if path == "/oauth/start":
                 return self._oauth_start()
             if path == "/oauth/callback":
@@ -1631,6 +1688,8 @@ class _AdminHandler(BaseHTTPRequestHandler):
                 return self._err(400, "BAD_JSON", "request body is not valid JSON")
             if path == "/api/cloud":
                 return self._send(200, self.server.admin.api_set_cloud(body))
+            if path == "/api/player-defaults":
+                return self._send(200, self.server.admin.api_set_player_defaults(body))
             self._err(404, "NOT_FOUND", "no such route")
         except Exception as exc:  # noqa: BLE001
             self._err(500, "INTERNAL", str(exc))
@@ -1910,6 +1969,21 @@ class LogicModule:
                         _cloud["expiresAt"] = float(exp)
                 except (TypeError, ValueError):
                     pass
+            # Player tunable defaults — written from the Admin UI, read by
+            # LBS 22000 as a fallback for its PollInterval / SubTimeout /
+            # HttpTimeout / CallbackBase inputs.
+            defaults = _safe_json(_read_str("PersistedPlayerDefaults"), {})
+            if isinstance(defaults, dict):
+                for k in ("pollInterval", "subTimeout", "httpTimeout"):
+                    v = defaults.get(k)
+                    try:
+                        if v is not None:
+                            _player_defaults[k] = int(v)
+                    except (TypeError, ValueError):
+                        pass
+                cb = defaults.get("callbackBase")
+                if isinstance(cb, str):
+                    _player_defaults["callbackBase"] = cb
 
     def _persist(self):
         """Serialize the four registries to retentive stores. Must run in
@@ -1922,6 +1996,7 @@ class LogicModule:
                 s = json.dumps(list(_stations.values()), separators=(",", ":"))
                 g = json.dumps(list(_groups.values()), separators=(",", ":"))
                 c = json.dumps(_cloud, separators=(",", ":"))
+                d = json.dumps(_player_defaults, separators=(",", ":"))
             except (TypeError, ValueError) as exc:
                 # Should never happen — every record is plain str/int/bool/
                 # list/dict — but never let a JSON encode failure break the
@@ -1932,10 +2007,11 @@ class LogicModule:
                     pass
                 return
         try:
-            self.fw.set_store("PersistedPlayers",  p.encode("iso-8859-15", "replace"))
-            self.fw.set_store("PersistedStations", s.encode("iso-8859-15", "replace"))
-            self.fw.set_store("PersistedGroups",   g.encode("iso-8859-15", "replace"))
-            self.fw.set_store("PersistedCloud",    c.encode("iso-8859-15", "replace"))
+            self.fw.set_store("PersistedPlayers",        p.encode("iso-8859-15", "replace"))
+            self.fw.set_store("PersistedStations",       s.encode("iso-8859-15", "replace"))
+            self.fw.set_store("PersistedGroups",         g.encode("iso-8859-15", "replace"))
+            self.fw.set_store("PersistedCloud",          c.encode("iso-8859-15", "replace"))
+            self.fw.set_store("PersistedPlayerDefaults", d.encode("iso-8859-15", "replace"))
         except Exception as exc:  # noqa: BLE001
             try:
                 self.logger.warning("Persist set_store failed: %s", exc)
@@ -2267,6 +2343,36 @@ class LogicModule:
                     "expiresIn": expires_in,
                 },
             }
+
+    def api_get_player_defaults(self):
+        with _registry_lock:
+            return {"ok": True, "defaults": dict(_player_defaults)}
+
+    def api_set_player_defaults(self, body):
+        """Update the per-player tunable defaults. Each field is optional;
+        missing fields keep their current value. Numeric fields are
+        clamped to the same lower bounds the Player module enforces so
+        a bad UI value can't break the integration."""
+        with _registry_lock:
+            if "pollInterval" in body:
+                try:
+                    _player_defaults["pollInterval"] = max(10, int(body["pollInterval"] or 0) or 60)
+                except (TypeError, ValueError):
+                    raise ValueError("pollInterval must be a number")
+            if "subTimeout" in body:
+                try:
+                    _player_defaults["subTimeout"] = max(60, int(body["subTimeout"] or 0) or 1800)
+                except (TypeError, ValueError):
+                    raise ValueError("subTimeout must be a number")
+            if "httpTimeout" in body:
+                try:
+                    _player_defaults["httpTimeout"] = max(2, int(body["httpTimeout"] or 0) or 5)
+                except (TypeError, ValueError):
+                    raise ValueError("httpTimeout must be a number")
+            if "callbackBase" in body:
+                _player_defaults["callbackBase"] = (body["callbackBase"] or "").strip().rstrip("/")
+        self._sync_async()
+        return {"ok": True, "defaults": dict(_player_defaults)}
 
     def api_set_cloud(self, body):
         with _registry_lock:
