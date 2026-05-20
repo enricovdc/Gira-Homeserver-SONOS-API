@@ -12,27 +12,27 @@ stores.
 | --- | --- | --- |
 | Play | `Play` (E2) | Rising edge → `_action_play` |
 | Pause | `Pause` (E3) | Rising edge → `_action_pause` |
-| Stop | `Stop` (E4) | Rising edge → `_action_stop` |
-| Next track | `Next` (E5) | Rising edge → `_action_next` |
-| Previous track | `Prev` (E6) | Rising edge → `_action_previous` |
-| Set absolute volume | `SetVolume` (E7) | Numeric 0–100 |
-| Volume up by step | `VolUp` (E8) | Reads current, adds `VolStep` |
-| Volume down by step | `VolDown` (E9) | Reads current, subtracts `VolStep` |
-| DPT 1.008 Up/Down rocker (single 1-bit GA) | `VolUpDown` (E10) | Value-driven. Writing 1 = volume up by `VolStep`, writing 0 = volume down. Saves the integrator a pair of helper logic blocks that would otherwise route Up → `VolUp` and Down → `VolDown`. |
-| Set mute on / off | `SetMute` (E11) | Numeric 0/1 |
-| Toggle mute | `MuteToggle` (E12) | Rising edge → read + invert + write |
-| Set shuffle on / off | `SetShuffle` (E13) | Composed with `SetRepeat` into Sonos `PlayMode`; changing one input preserves the other |
-| Set repeat-all on / off | `SetRepeat` (E14) | REPEAT_ONE surfaces on `RepeatState` but is not exposed as a separate input |
-| Start preset by index | `StartRadio` (E15) | Alphabetical 1..N into the Admin preset library |
-| Start preset by name | `StartRadioName` (E16) | Case-insensitive lookup in the same library |
-| Form group preset by index | `GroupPreset` (E17) | Alphabetical 1..N into the Admin group-preset library; master + members come from the Admin definition |
-| Form group preset by name | `GroupPresetName` (E18) | Case-insensitive |
-| Break out of current group | `Ungroup` (E19) | Rising edge → `BecomeCoordinatorOfStandaloneGroup` |
-| Force UPnP re-subscribe | `Resubscribe` (E20) | Rising edge clears SIDs + re-subscribes |
-| Play / Pause toggle (single 1-bit GA) | `PlayPause` (E21) | Value-driven. Writing 1 plays, writing 0 pauses. Pairs with one KNX toggle GA. |
-| Next / Previous track toggle | `NextPrev` (E22) | Value-driven. Writing 1 = next, writing 0 = previous. |
-| Next / Previous preset toggle | `PresetNextPrev` (E23) | Steps through the Admin preset library alphabetically. Wraps at both ends. NO_PRESETS on LastError if the library is empty. |
-| Play notification sound | `PlaySound` (E24) | Equivalent to Home Assistant's Sonos `announce: true`. Plays a clip from the Admin Sounds library (alphabetical index 1..N). Primary path uses the native `AudioClip.LoadAudioClip` SOAP action on `urn:schemas-sonos-com:service:AudioClip:1` — Sonos S2 firmware ducks the current music, plays the clip, and resumes automatically. On S1 hardware (no AudioClip service) falls back to snapshot + SetAVTransportURI + Play + poll-for-STOPPED + restore. |
+| Play / Pause toggle (single 1-bit GA) | `PlayPause` (E4) | Value-driven. Writing 1 plays, writing 0 pauses. |
+| Stop | `Stop` (E5) | Rising edge → `_action_stop` |
+| Next track | `Next` (E6) | Rising edge → `_action_next` |
+| Previous track | `Prev` (E7) | Rising edge → `_action_previous` |
+| Next / Previous track toggle | `NextPrev` (E8) | Value-driven. Writing 1 = next, writing 0 = previous. |
+| Set absolute volume | `SetVolume` (E9) | Numeric 0–100 |
+| Volume up by step | `VolUp` (E10) | Reads current, adds `VolStep` |
+| Volume down by step | `VolDown` (E11) | Reads current, subtracts `VolStep` |
+| DPT 1.008 Up/Down rocker | `VolUpDown` (E12) | Value-driven. 1 = volume up by `VolStep`, 0 = volume down. |
+| Set mute (state) | `SetMute` (E13) | **Value-driven** 0/1 — pair with a KNX switch GA that carries the desired state. The Mute output mirrors the actual state. |
+| Mute toggle (button) | `MuteToggle` (E14) | **Rising-edge only** — each write of 1 reads the current mute state and flips it. For a KNX push button that always sends value 1 on press. Use `SetMute` instead for a regular switch that sends both 0 and 1. |
+| Set shuffle on / off | `SetShuffle` (E15) | Composed with `SetRepeat` into Sonos `PlayMode`; changing one input preserves the other |
+| Set repeat-all on / off | `SetRepeat` (E16) | REPEAT_ONE surfaces on `RepeatState` but is not exposed as a separate input |
+| Start preset by index | `StartRadio` (E17) | Alphabetical 1..N into the Admin preset library |
+| Start preset by name | `StartRadioName` (E18) | Case-insensitive lookup in the same library |
+| Next / Previous preset toggle | `PresetNextPrev` (E19) | Steps through the Admin preset library alphabetically. Wraps at both ends. NO_PRESETS on LastError if the library is empty. |
+| Form group preset by index | `GroupPreset` (E20) | Alphabetical 1..N into the Admin group-preset library; master + members come from the Admin definition |
+| Form group preset by name | `GroupPresetName` (E21) | Case-insensitive |
+| Break out of current group | `Ungroup` (E22) | Rising edge → `BecomeCoordinatorOfStandaloneGroup` |
+| Play notification sound | `PlaySound` (E23) | Equivalent to Home Assistant's Sonos `announce: true`. Plays a clip from the Admin Sounds library. Primary path is `AudioClip.LoadAudioClip` (S2); falls back to snapshot/restore on S1. |
+| Force UPnP re-subscribe | `Resubscribe` (E24) | Rising edge clears SIDs + re-subscribes |
 
 ## Status / observability (LBS 22000 outputs)
 
@@ -63,7 +63,7 @@ stores.
 | Group master | `GroupInfo` (A23) | Empty when coordinator / standalone; master's Zone Name (resolved via Admin) or RINCON UUID when a slave |
 | Is coordinator | `IsCoordinator` (A24) | 1 when this player is the group coordinator or standalone, 0 when slave. Derived from `CurrentTrackURI` starting with `x-rincon:` |
 | Active preset index | `ActiveStation` (A25) | 0 = none. Alphabetical 1..N index of the last preset started, regardless of whether it was selected by index, name, or `PresetNextPrev` |
-| Active preset name | `ActiveStationName` (A26) | Preset's display name from the Admin library |
+| Active preset name | `ActiveStationName` (A26) | Preset's display name from the Admin library. Prefixed with `Loading: ` the moment a preset trigger fires — visible during the SOAP dispatch (matters for group-join and queue playback that take a few seconds). Prefix clears on success. |
 | Last error code | `LastError` (A27) | UPnP code, `UNREACHABLE`, `HTTP_<n>`, `PRESET_NOT_FOUND`, `NO_PRESETS`, `GROUP_NOT_FOUND`, `GROUP_PARTIAL`, `SET_PLAY_MODE_FAILED`, `EXCEPTION: …` |
 | UPnP subscription health | `Subscribed` (A28) | 1 = both AVTransport + RenderingControl subscriptions alive |
 

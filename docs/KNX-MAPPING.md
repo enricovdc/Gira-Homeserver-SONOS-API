@@ -30,7 +30,7 @@ LBS as a `number` or `string` per the input declaration in
 | 5/0/3  | 1.001 | `Stop`         | Rising edge stops |
 | 5/0/4  | 1.001 | `Next`         | Next track |
 | 5/0/5  | 1.001 | `Prev`         | Previous track |
-| 5/0/6  | 1.001 | `MuteToggle`   | Rising edge inverts mute |
+| 5/0/6  | 1.001 | `MuteToggle`   | **Rising edge only** — every write of 1 reads the player's mute state and flips it. For a KNX push button that always sends 1 on press. Use `SetMute` instead for a regular switch GA. |
 
 ### Transport (value toggles for one-bit GAs)
 
@@ -51,7 +51,7 @@ KNX group address whose flipping drives the action.
 | 5/0/21 | 1.001 | `VolUp`      | Rising edge adds `VolStep` |
 | 5/0/22 | 1.001 | `VolDown`    | Rising edge subtracts `VolStep` |
 | 5/0/23 | 1.008 | `VolUpDown`  | DPT 1.008 "Up/Down" rocker — wire the single 1-bit GA straight in. Each write of 1 adds `VolStep`, each write of 0 subtracts. No helper logic blocks needed. |
-| 5/0/24 | 1.001 | `SetMute`    | 1 = mute, 0 = unmute |
+| 5/0/24 | 1.001 | `SetMute`    | **Value-driven** — 1 = mute, 0 = unmute. Pair with a KNX switch GA that carries the desired mute state. The Mute output mirrors what the player actually does. |
 
 ### Play mode (shuffle / repeat)
 

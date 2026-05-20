@@ -2,7 +2,7 @@
 
 Run through this list against real Sonos hardware when commissioning
 the HSL3 modules, after a Sonos firmware update, or after network
-changes. The 118 unit tests under `tests/test_logic_modules.py` cover
+changes. The 121 unit tests under `tests/test_logic_modules.py` cover
 the pure logic against a stubbed framework; this checklist is for
 hardware-in-the-loop validation.
 
@@ -90,6 +90,21 @@ Trigger the corresponding KNX address (or simulate the input in Experte):
 - [ ] Test a playlist preset → the queue-and-play path runs
       (`RemoveAllTracksFromQueue` + `AddURIToQueue` + transport switch
       + `Play`). Playback should start the playlist.
+- [ ] Trigger a slow preset (a group-join preset, or a playlist whose
+      queue-and-play takes a couple of seconds). The
+      `ActiveStationName` output should immediately show
+      `Loading: <name>` and then drop the prefix once the player
+      switches to the new source.
+
+## Track-metadata refresh
+
+- [ ] Start a Spotify track on a player (Artist + Album metadata are
+      populated). Then switch to a radio stream (e.g. via a different
+      preset). Within one Tick, the `Artist` and `Album` outputs
+      should clear — radio streams have no `<dc:creator>`/`<upnp:album>`
+      tags so the previous Spotify metadata must not leak.
+- [ ] The `Title` output for the radio stream becomes the
+      `streamContent` value (the now-playing label from the stream).
 
 ## Group presets
 

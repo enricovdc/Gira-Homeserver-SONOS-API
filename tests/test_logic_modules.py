@@ -559,6 +559,69 @@ class TestSonosPlayerLogicModule(unittest.TestCase):
                   "ShuffleAllowed", "RepeatAllowed"):
             self.assertEqual(fw.outputs[k], 0, k)
 
+    def test_notify_clears_artist_album_on_track_change(self):
+        """When playback moves from a track with artist/album (Spotify)
+        to a radio stream (no <dc:creator>/<upnp:album>), the new
+        track's metadata block is present but those tags are absent.
+        The parser must surface them as empty strings and the LBS
+        must overwrite the outputs — otherwise the Spotify artist
+        leaks into the radio display."""
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._host = "10.0.0.5"
+        # Step 1: Spotify track with rich metadata.
+        lm._apply_notify_parsed({
+            "state": "PLAYING",
+            "title": "Yesterday",
+            "artist": "The Beatles",
+            "album": "Help!",
+            "trackUri": "x-sonos-spotify:track:abc",
+        })
+        self.assertEqual(fw.outputs["Artist"], b"The Beatles")
+        self.assertEqual(fw.outputs["Album"], b"Help!")
+        # Step 2: switch to a radio stream — metadata block present
+        # but no creator / album tags. parse_notify defaults those to
+        # empty strings; the LBS must overwrite, not preserve.
+        lm._apply_notify_parsed({
+            "state": "PLAYING",
+            "title": "",
+            "artist": "",
+            "album": "",
+            "streamContent": "BBC Radio 1",
+            "trackUri": "x-sonosapi-stream:s12345",
+        })
+        self.assertEqual(fw.outputs["Artist"], b"")
+        self.assertEqual(fw.outputs["Album"], b"")
+        # Title comes from streamContent for radio.
+        self.assertEqual(fw.outputs["Title"], b"BBC Radio 1")
+
+    def test_parse_notify_defaults_metadata_keys_to_empty(self):
+        """When parse_notify sees a CurrentTrackMetaData block but
+        the inner tags are absent (radio streams), it must surface
+        artist / album / albumArtURI / streamContent as empty strings
+        rather than omit them — that's what lets the LBS distinguish
+        "track changed, no artist" from "no metadata in this notify"."""
+        sample = (
+            '<e:propertyset><e:property><LastChange>&lt;Event&gt;'
+            '&lt;InstanceID val=&quot;0&quot;&gt;'
+            '&lt;CurrentTrackMetaData val=&quot;'
+            '&amp;lt;DIDL-Lite&amp;gt;&amp;lt;item&amp;gt;'
+            '&amp;lt;upnp:class&amp;gt;object.item.audioItem.audioBroadcast&amp;lt;/upnp:class&amp;gt;'
+            '&amp;lt;/item&amp;gt;&amp;lt;/DIDL-Lite&amp;gt;'
+            '&quot;/&gt;'
+            '&lt;/InstanceID&gt;&lt;/Event&gt;'
+            '</LastChange></e:property></e:propertyset>'
+        )
+        r = self.mod.parse_notify(sample)
+        # Metadata block was present → every metadata-derived key
+        # surfaces, even empty.
+        self.assertEqual(r["title"],         "")
+        self.assertEqual(r["artist"],        "")
+        self.assertEqual(r["album"],         "")
+        self.assertEqual(r["albumArtURI"],   "")
+        self.assertEqual(r["streamContent"], "")
+
     def test_apply_notify_publishes_album_and_group_info(self):
         fw = StubFramework()
         lm = self.mod.LogicModule(fw)
@@ -1332,6 +1395,39 @@ class TestPlayerStationFromAdmin(unittest.TestCase):
                     mod._stations.clear()
                     mod._groups.clear()
                     mod._players.clear()
+
+    def test_action_start_radio_publishes_loading_then_resolved(self):
+        """Multi-step preset dispatch (join URIs, queue playback) can
+        take seconds; ActiveStationName must move immediately to
+        "Loading: <name>" so the visualisation reflects the change
+        in flight. On success the prefix is dropped."""
+        with self.admin._registry_lock:
+            self.admin._stations.clear()
+            self.admin._stations["s"] = {
+                "id": "s", "name": "BBC Radio 1",
+                "uri": "http://stream.example.com/r1.mp3",
+                "metadata": "",
+            }
+        fw = StubFramework()
+        lm = self.player.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._host = "10.0.0.5"
+        # Capture every output write in order so we can see the
+        # loading prefix landed BEFORE the final name.
+        seen_names = []
+        original_set_output = fw.set_output
+        def capture(key, value):
+            if key == "ActiveStationName":
+                seen_names.append(value)
+            return original_set_output(key, value)
+        fw.set_output = capture
+        lm._soap = lambda s, a, e: (True, "", "")
+        lm._action_start_radio(1)
+        # The loading prefix appears first, then the clean name.
+        self.assertTrue(any(v == b"Loading: BBC Radio 1" for v in seen_names),
+                        "expected a 'Loading: BBC Radio 1' write; got {}".format(seen_names))
+        # And the final value is the clean name.
+        self.assertEqual(fw.outputs["ActiveStationName"], b"BBC Radio 1")
 
     def test_lookup_station_via_admin_returns_dict_with_metadata(self):
         with self.admin._registry_lock:

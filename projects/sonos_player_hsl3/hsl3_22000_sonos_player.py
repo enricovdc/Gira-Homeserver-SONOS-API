@@ -619,6 +619,17 @@ def parse_notify(body):
     md = re.search(r'<CurrentTrackMetaData\s+val="([^"]*)"', inner)
     if md:
         meta = unescape_xml(md.group(1))
+        # Default every metadata-derived key to empty before pulling
+        # individual fields. Radio streams legitimately have no
+        # <dc:creator> / <upnp:album>; treating "tag absent" as
+        # "value is empty" lets the caller blank stale Artist /
+        # Album outputs when the track changes from a Spotify track
+        # (which has those tags) to a radio stream (which doesn't).
+        out["title"] = ""
+        out["artist"] = ""
+        out["album"] = ""
+        out["albumArtURI"] = ""
+        out["streamContent"] = ""
         t = re.search(r"<dc:title>([^<]*)</dc:title>", meta)
         if t:
             out["title"] = unescape_xml(t.group(1))
@@ -1039,11 +1050,18 @@ class LogicModule:
             self._last_volume = parsed["volume"]
         if "mute" in parsed:
             self._last_mute = parsed["mute"]
-        if "title" in parsed and parsed["title"]:
+        # parse_notify guarantees that when a CurrentTrackMetaData
+        # block was found, the title / artist / album / albumArtURI
+        # keys are all present (possibly empty). Always overwrite
+        # so the previous track's Artist doesn't leak when going
+        # from a Spotify track (rich metadata) to a radio stream
+        # (no <dc:creator>/<upnp:album>). streamContent overrides
+        # title for radio playback when it's non-empty.
+        if "title" in parsed:
             self._last_title = _friendly_title(parsed["title"])
         if "streamContent" in parsed and parsed["streamContent"]:
             self._last_title = _friendly_title(parsed["streamContent"])
-        if "artist" in parsed and parsed["artist"]:
+        if "artist" in parsed:
             self._last_artist = parsed["artist"]
         if "album" in parsed:
             self._last_album = parsed["album"]
@@ -1372,6 +1390,15 @@ class LogicModule:
         # the caller used the numeric index or the preset name.
         active_idx = int(admin_rec.get("index") or 0)
         active_name = admin_rec.get("name", "") or ""
+        # Optimistic feedback: post "Loading: <name>" before the SOAP
+        # dispatch starts so the visualisation moves immediately when
+        # the integrator triggers PresetNextPrev. Preset playback
+        # involves multi-step SOAP (join URIs do per-member calls,
+        # queue playback does Remove + Add + SwitchTransport + Play),
+        # and without this hook ActiveStationName would otherwise
+        # only update after the whole dispatch completed.
+        self.fw.run_in_context(self._mark_active_station_loading,
+                               (active_idx, active_name))
 
         # Group-join preset: the URI is "x-rincon:RINCON_<master>". Sending
         # it via SetAVTransportURI makes this player a slave of the
@@ -1852,14 +1879,18 @@ class LogicModule:
             self._last_volume = volume
         if mute is not None:
             self._last_mute = mute
-        if title:
+        # Track metadata: always overwrite when we got an online poll
+        # back, regardless of whether the individual field was empty.
+        # Radio streams have no <dc:creator>/<upnp:album>, so a stale
+        # Artist / Album from the previous Spotify track would
+        # otherwise stay on the output. An offline poll (online=False
+        # passes empty strings) keeps the last known values so a
+        # transient network glitch doesn't blank the display.
+        if online:
             self._last_title = _friendly_title(title)
-        if artist:
             self._last_artist = artist
-        # Album / art may legitimately be empty (radio streams have no
-        # album) so we always overwrite — no `if` guard.
-        self._last_album = album
-        self._last_album_art = self._absolute_album_art(album_art)
+            self._last_album = album
+            self._last_album_art = self._absolute_album_art(album_art)
         if play_mode:
             self._last_shuffle, self._last_repeat = play_mode_to_flags(play_mode)
         if track_uri or online:
@@ -1908,6 +1939,23 @@ class LogicModule:
         self._active_station_name = name or ""
         self.fw.set_output("ActiveStation", float(idx))
         self.fw.set_output("ActiveStationName", to_iso_bytes(self._active_station_name))
+
+    def _mark_active_station_loading(self, idx, name):
+        """Optimistic in-flight update for the ActiveStationName output.
+        Called the moment the integrator triggers a preset, before any
+        SOAP completes. Prefixed with "Loading: " so the visualisation
+        can show the change-in-progress; the prefix is dropped on
+        success via _mark_active_station. On failure the prefix stays
+        until the next preset is started — LastError carries the why."""
+        try:
+            idx = int(idx)
+        except (TypeError, ValueError):
+            idx = 0
+        self._active_station = idx
+        label = "Loading: " + (name or "")
+        self._active_station_name = label
+        self.fw.set_output("ActiveStation", float(idx))
+        self.fw.set_output("ActiveStationName", to_iso_bytes(label))
 
     def _write_error(self, code):
         if self.debug is not None:
