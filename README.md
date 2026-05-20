@@ -84,7 +84,7 @@ firmware **4.13+** (HSL3 / Python 3.9 logic-module SDK).
   project-wide *Player Defaults* plus optional per-player *Advanced
   overrides* on each player card. One place to tune, no input wires
   to maintain.
-- **127 unit tests** with a stubbed `Hsl3Framework`, runnable in CI.
+- **135 unit tests** with a stubbed `Hsl3Framework`, runnable in CI.
 
 ## Repository layout
 
@@ -106,7 +106,7 @@ firmware **4.13+** (HSL3 / Python 3.9 logic-module SDK).
 ├── scripts/
 │   └── build_hslz.py            packager → dist/*.hslz
 ├── tests/
-│   └── test_logic_modules.py    127 unit tests with a stubbed framework
+│   └── test_logic_modules.py    135 unit tests with a stubbed framework
 └── dist/
     ├── 22000_sonos_player.hslz  deployable archive (committed)
     ├── 22001_sonos_admin.hslz
@@ -155,7 +155,7 @@ on a machine that has the SDK.
 python3 tests/test_logic_modules.py
 ```
 
-127 tests covering: pure helpers (SOAP fault extraction, NOTIFY parsing,
+135 tests covering: pure helpers (SOAP fault extraction, NOTIFY parsing,
 URI normalisation, play-mode composition, transport-actions parsing,
 iso-8859-15 encoding), the
 `LogicModule` IO contract (string outputs are bytes, numeric outputs

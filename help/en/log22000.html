@@ -46,7 +46,7 @@
   <div class="alert-box ibox-hint">
     <div class="box-title">Note</div>
     <div class="box-text"><div class="descr">
-      Add one instance per Sonos player. Each instance must have a unique Host. All instances share one NOTIFY listener thread. The block has no PollInterval / SubTimeout / HttpTimeout / CallbackBase inputs &mdash; configure those in the Sonos Admin web UI&apos;s Player Defaults section (project-wide) or per-player via the Advanced overrides panel on each player&apos;s card.
+      Add one instance per Sonos player. Each instance must have a unique Host. All instances share one NOTIFY listener thread. The block has no PollInterval / SubTimeout / HttpTimeout / CallbackBase / Max-text-length inputs &mdash; configure those in the Sonos Admin web UI&apos;s Player Defaults section (project-wide) or per-player via the Advanced overrides panel on each player&apos;s card. Setting Max text length to a non-zero value turns long Title / Artist / Album / ActiveStationName / ZoneName / GroupInfo / LastError outputs into a 1 Hz marquee scroll.
     </div></div>
   </div>
 </div>

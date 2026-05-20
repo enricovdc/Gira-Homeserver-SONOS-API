@@ -87,10 +87,16 @@ _cloud = {
 # restarts via the PersistedPlayerDefaults store. Edited from the
 # Admin web UI's "Player Defaults" section.
 _player_defaults = {
-    "pollInterval": 60,    # seconds
-    "subTimeout":   1800,  # seconds
-    "httpTimeout":  5,     # seconds
-    "callbackBase": "",    # empty = auto-detect from LAN IP
+    "pollInterval":      60,    # seconds
+    "subTimeout":        1800,  # seconds
+    "httpTimeout":       5,     # seconds
+    "callbackBase":      "",    # empty = auto-detect from LAN IP
+    # 0 = text outputs (Title, Artist, Album, ActiveStationName,
+    # ZoneName, GroupInfo, LastError) emit their full value as-is.
+    # Non-zero = anything longer than this character count scrolls
+    # marquee-style at 1 char/second so a visualisation tile with a
+    # narrow text field still shows the whole content.
+    "marqueeMaxLength":  0,
 }
 _admin_instance_ref = {"instance": None}   # Wrapped in dict so swap is atomic.
 
@@ -115,7 +121,7 @@ def get_player_tunables(spec):
     rec = get_player_record(spec) or {}
     # Numeric overrides — 0 / negative / unparseable means "no
     # override", fall through to the project default.
-    for key in ("pollInterval", "subTimeout", "httpTimeout"):
+    for key in ("pollInterval", "subTimeout", "httpTimeout", "marqueeMaxLength"):
         try:
             v = int(rec.get(key) or 0)
         except (TypeError, ValueError):
@@ -1081,6 +1087,7 @@ details.group-add .row { margin-top: 6px; }
       <label for="pd-sub">UPnP subscription timeout (seconds)</label><input id="pd-sub" type="number" min="60" step="1">
       <label for="pd-http">HTTP timeout (seconds)</label><input id="pd-http" type="number" min="2" step="1">
       <label for="pd-cb">Callback base URL (leave empty for auto)</label><input id="pd-cb" type="text" placeholder="http://&lt;homeserver-ip&gt;:8081">
+      <label for="pd-marq">Max text length (0 = no marquee)</label><input id="pd-marq" type="number" min="0" step="1" placeholder="0">
     </div>
     <div class="row">
       <button id="pd-save">Save defaults</button>
@@ -1238,6 +1245,11 @@ async function refreshPlayers() {
             '<input type="number" min="2"  data-edit="' + esc(p.id) + '" data-field="httpTimeout" ' +
                    'value="' + esc(p.httpTimeout || '') + '" placeholder="default">' +
           '</div>' +
+          '<div class="pc-field">' +
+            '<label>Max text length</label>' +
+            '<input type="number" min="0"  data-edit="' + esc(p.id) + '" data-field="marqueeMaxLength" ' +
+                   'value="' + esc(p.marqueeMaxLength || '') + '" placeholder="default" title="0 disables marquee">' +
+          '</div>' +
           '<div class="pc-field" style="grid-column:1 / -1">' +
             '<label>Callback base URL</label>' +
             '<input type="text" data-edit="' + esc(p.id) + '" data-field="callbackBase" ' +
@@ -1299,6 +1311,7 @@ async function refreshPlayerDefaults() {
   document.getElementById('pd-sub').value = r.defaults.subTimeout;
   document.getElementById('pd-http').value = r.defaults.httpTimeout;
   document.getElementById('pd-cb').value = r.defaults.callbackBase || '';
+  document.getElementById('pd-marq').value = r.defaults.marqueeMaxLength || 0;
 }
 function fmtSize(n) {
   if (!n) return '—';
@@ -1785,6 +1798,7 @@ document.getElementById('pd-save').addEventListener('click', async () => {
     subTimeout:   parseInt(document.getElementById('pd-sub').value,  10) || 0,
     httpTimeout:  parseInt(document.getElementById('pd-http').value, 10) || 0,
     callbackBase: document.getElementById('pd-cb').value.trim(),
+    marqueeMaxLength: parseInt(document.getElementById('pd-marq').value, 10) || 0,
   };
   try {
     await api('PUT', '/api/player-defaults', body);
@@ -2544,9 +2558,10 @@ class LogicModule:
             # clears the override (back to the project default). The
             # validation floors mirror the Player module's clamps so
             # a bad value entered in the UI can't sneak past.
-            for key, floor in (("pollInterval", 10),
-                               ("subTimeout",   60),
-                               ("httpTimeout",  2)):
+            for key, floor in (("pollInterval",     10),
+                               ("subTimeout",       60),
+                               ("httpTimeout",      2),
+                               ("marqueeMaxLength", 4)):
                 if key in body:
                     try:
                         v = int(body[key] or 0)
@@ -2791,6 +2806,15 @@ class LogicModule:
                     raise ValueError("httpTimeout must be a number")
             if "callbackBase" in body:
                 _player_defaults["callbackBase"] = (body["callbackBase"] or "").strip().rstrip("/")
+            if "marqueeMaxLength" in body:
+                try:
+                    v = int(body["marqueeMaxLength"] or 0)
+                except (TypeError, ValueError):
+                    raise ValueError("marqueeMaxLength must be a number")
+                # 0 disables marquee entirely. Any positive value
+                # enables scrolling for outputs that exceed it; floor
+                # at 4 so the visible window is wide enough to read.
+                _player_defaults["marqueeMaxLength"] = 0 if v <= 0 else max(4, v)
         self._sync_async()
         return {"ok": True, "defaults": dict(_player_defaults)}
 

@@ -600,6 +600,82 @@ class TestSonosPlayerLogicModule(unittest.TestCase):
         lm.on_calc(ins)
         self.assertEqual(actions, ["prev"])
 
+    def test_marquee_disabled_emits_full_text(self):
+        """maxLength = 0 disables marquee — long strings pass through
+        as-is, matching the pre-marquee behaviour."""
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm._max_text_length = 0
+        long = "Bohemian Rhapsody (Remastered 2011) - Queen"
+        lm._publish_text("Title", long)
+        self.assertEqual(fw.outputs["Title"], long.encode("iso-8859-15"))
+
+    def test_marquee_short_text_passes_through_unchanged(self):
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm._max_text_length = 12
+        lm._publish_text("Title", "Yesterday")
+        self.assertEqual(fw.outputs["Title"], b"Yesterday")
+
+    def test_marquee_long_text_truncates_to_window(self):
+        """First view is the leading max_len chars of the text."""
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm._max_text_length = 10
+        lm._publish_text("Title", "Bohemian Rhapsody")
+        # 10-char window starting at position 0.
+        self.assertEqual(fw.outputs["Title"], b"Bohemian R")
+
+    def test_marquee_tick_advances_position(self):
+        """Each Marquee tick shifts the scroll window one character
+        to the right; after enough ticks the window wraps."""
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm._max_text_length = 10
+        lm._publish_text("Title", "Bohemian Rhapsody")
+        lm._marquee_tick()
+        self.assertEqual(fw.outputs["Title"], b"ohemian Rh")
+        lm._marquee_tick()
+        self.assertEqual(fw.outputs["Title"], b"hemian Rha")
+
+    def test_marquee_resets_position_when_text_changes(self):
+        """When the underlying text changes (new track), the scroll
+        position must reset to 0 so the visualisation reads from the
+        start of the new title."""
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm._max_text_length = 8
+        lm._publish_text("Title", "First Track Long")
+        lm._marquee_tick()
+        lm._marquee_tick()
+        # New track arrives — position must reset.
+        lm._publish_text("Title", "Second Track Even Longer")
+        self.assertEqual(fw.outputs["Title"], b"Second T")
+        self.assertEqual(lm._marquee_state["Title"]["pos"], 0)
+
+    def test_marquee_view_wraps_through_separator(self):
+        """The view cycles past the end of the text via the three-
+        space separator and reads back to the beginning. Only kicks
+        in when the text is actually longer than the window."""
+        view = self.mod.LogicModule._compute_marquee_view
+        # "Foobar" + "   " = "Foobar   " (length 9). max_len=5 makes
+        # this text scroll. pos=6 should read "   Fo" — three
+        # separator chars then the start of the text again.
+        self.assertEqual(view("Foobar", 6, 5), "   Fo")
+        # pos = 9 (length of cycled string) wraps back to pos 0.
+        self.assertEqual(view("Foobar", 9, 5), view("Foobar", 0, 5))
+
+    def test_marquee_tick_idle_when_disabled(self):
+        """Marquee tick is a no-op when no text exceeds the limit
+        or maxLength is 0 — no outputs touched."""
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm._max_text_length = 0
+        lm._publish_text("Title", "Anything Goes Here Long Or Short")
+        fw.outputs.clear()
+        lm._marquee_tick()
+        self.assertEqual(fw.outputs, {})
+
     def test_mark_active_station_publishes_name(self):
         """_mark_active_station writes both ActiveStation (index) and
         ActiveStationName (string) so visualisations can display the
@@ -2261,6 +2337,38 @@ class TestPlayerStationFromAdmin(unittest.TestCase):
         self.assertEqual(lm._sub_timeout_s, 600)
         self.assertEqual(lm._http_timeout_s, 4)
         self.assertEqual(lm._callback_base, "http://override:9000")
+
+    def test_admin_tunables_include_marquee_max_length(self):
+        """Project default + per-player override layering covers the
+        marqueeMaxLength field same as PollInterval / SubTimeout /
+        HttpTimeout / CallbackBase."""
+        fw = StubFramework()
+        lm = self.admin.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        # Project-wide default — must clamp to a minimum readable window.
+        lm.api_set_player_defaults({"marqueeMaxLength": 20})
+        with self.admin._registry_lock:
+            self.admin._players.clear()
+            self.admin._players["lr"] = {
+                "id": "lr", "name": "lr", "zoneName": "Living Room",
+                "ip": "10.0.0.50", "mac": "", "uuid": "RINCON_LR",
+                "model": "", "source": "manual",
+            }
+        # No per-player override yet → fall through to project default.
+        t = self.admin.get_player_tunables("RINCON_LR")
+        self.assertEqual(t["marqueeMaxLength"], 20)
+        # Per-player override beats the project default.
+        lm.api_update_player("lr", {"marqueeMaxLength": 30})
+        t = self.admin.get_player_tunables("RINCON_LR")
+        self.assertEqual(t["marqueeMaxLength"], 30)
+        # Clear the override (0) → back to project default.
+        lm.api_update_player("lr", {"marqueeMaxLength": 0})
+        t = self.admin.get_player_tunables("RINCON_LR")
+        self.assertEqual(t["marqueeMaxLength"], 20)
+        # Minimum-window clamp at the API: a value below 4 is bumped
+        # up so the marquee window is always readable.
+        lm.api_set_player_defaults({"marqueeMaxLength": 2})
+        self.assertGreaterEqual(self.admin.get_player_defaults()["marqueeMaxLength"], 4)
 
     def test_admin_api_update_player_stores_overrides(self):
         """api_update_player accepts the four override fields and

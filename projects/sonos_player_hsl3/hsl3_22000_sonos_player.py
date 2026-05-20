@@ -837,6 +837,20 @@ class LogicModule:
         # every button as unavailable rather than incorrectly allowing them.
         self._last_allowed = dict(_DEFAULT_ALLOWED)
         self._uuid = ""           # Sonos RINCON UUID — needed to build queue URI
+        # Marquee scroll state for the long text outputs. Keyed by
+        # output name. Each entry has the full text, the current
+        # scroll position, and the last view actually emitted (SBC
+        # at the marquee level). Zero max length means "no scrolling,
+        # emit the full text" — see _publish_text.
+        self._max_text_length = 0
+        self._marquee_state = {
+            key: {"text": "", "pos": 0, "last_view": None}
+            for key in (
+                "Title", "Artist", "Album",
+                "ActiveStationName", "ZoneName",
+                "GroupInfo", "LastError",
+            )
+        }
         self._active_station = 0
         self._active_station_name = ""
         self._online = False
@@ -880,10 +894,14 @@ class LogicModule:
         rec = _admin_player_record(self._host_spec)
         if rec and rec.get("zoneName"):
             self._last_zone_name = rec["zoneName"]
-            self.fw.set_output("ZoneName", to_iso_bytes(self._last_zone_name))
+            self._publish_text("ZoneName", self._last_zone_name)
 
         # First tick after a short delay so HS finishes initialising.
         self.fw.set_timer("Tick", 5)
+        # Marquee tick fires every second; the callback only does
+        # work when at least one text output exceeds the configured
+        # max length, so it's cheap when scrolling is disabled.
+        self.fw.set_timer("Marquee", 1)
 
     def on_calc(self, inputs):
         prev_spec = self._host_spec
@@ -1042,6 +1060,12 @@ class LogicModule:
             # Re-arm immediately so we never miss a tick.
             self.fw.set_timer("Tick", self._poll_interval_s)
             self._run_control_threaded(self._tick_work)
+        if timer["Marquee"].changed:
+            # 1 Hz scroll for any text output that exceeds the
+            # configured max length. Cheap when nothing's scrolling.
+            # Runs in node context — no run_in_context needed.
+            self.fw.set_timer("Marquee", 1)
+            self._marquee_tick()
 
     # ----- Public API used by the shared NOTIFY listener -------------------
 
@@ -1109,6 +1133,7 @@ class LogicModule:
         self._sub_timeout_s   = max(60, int(tunables.get("subTimeout")   or 1800))
         self._renew_threshold_s = max(30, self._sub_timeout_s // 6)
         self._http_timeout_s  = max(2,  int(tunables.get("httpTimeout")  or 5))
+        self._max_text_length = max(0, int(tunables.get("marqueeMaxLength") or 0))
         cb = (tunables.get("callbackBase") or "").strip().rstrip("/")
         if not cb:
             cb = "http://{}:{}".format(_get_local_lan_ip(), self._notify_port)
@@ -1834,6 +1859,74 @@ class LogicModule:
 
     # ----- Output marshalling (runs in node context) -----------------------
 
+    # Separator string inserted between repetitions when a marquee
+    # cycles past the end of the source text. Three spaces is the
+    # usual convention — wide enough to read where one repetition
+    # ends and the next begins.
+    _MARQUEE_SEP = "   "
+
+    @classmethod
+    def _compute_marquee_view(cls, text, pos, max_len):
+        """Pure helper: return the substring of length max_len
+        starting at scroll position ``pos``. The source string is
+        looped via ``text + sep + text + sep`` so slicing past the
+        end wraps cleanly. Texts at or below max_len return as-is."""
+        if not text or max_len <= 0:
+            return text or ""
+        if len(text) <= max_len:
+            return text
+        cycled = text + cls._MARQUEE_SEP
+        n = len(cycled)
+        pos = pos % n
+        # Double-buffer for cheap wrap-around slicing.
+        return (cycled + cycled)[pos:pos + max_len]
+
+    def _publish_text(self, key, full_text):
+        """Emit a text output, applying marquee scroll when the text
+        exceeds ``self._max_text_length`` and the integrator has
+        opted in via the Admin's Player Defaults / Advanced overrides.
+        Idempotent at the view level — if the (possibly scrolled)
+        view didn't change since the last write, the KNX broadcast
+        is suppressed."""
+        if full_text is None:
+            full_text = ""
+        state = self._marquee_state.get(key)
+        if state is None:
+            # Output not registered for marquee — write directly.
+            self.fw.set_output(key, to_iso_bytes(full_text))
+            return
+        if state["text"] != full_text:
+            # Underlying content changed — restart the scroll cycle
+            # so the visualisation always reads from the beginning.
+            state["text"] = full_text
+            state["pos"] = 0
+        view = self._compute_marquee_view(
+            full_text, state["pos"], self._max_text_length
+        )
+        if view == state["last_view"]:
+            return  # SBC at the view level.
+        state["last_view"] = view
+        self.fw.set_output(key, to_iso_bytes(view))
+
+    def _marquee_tick(self):
+        """Advance the scroll position one character for every text
+        output whose underlying value exceeds the configured max
+        length, and re-emit each one's new view. No-op when marquee
+        is disabled or every text fits."""
+        max_len = self._max_text_length
+        if max_len <= 0:
+            return
+        for key, state in self._marquee_state.items():
+            text = state.get("text") or ""
+            if len(text) <= max_len:
+                continue
+            state["pos"] += 1
+            view = self._compute_marquee_view(text, state["pos"], max_len)
+            if view == state["last_view"]:
+                continue
+            state["last_view"] = view
+            self.fw.set_output(key, to_iso_bytes(view))
+
     def _absolute_album_art(self, uri):
         """Sonos returns album-art URIs as relative paths (/getaa?...).
         Prepend http://<host>:1400 so the integrator can drop the URI
@@ -1860,6 +1953,8 @@ class LogicModule:
 
     def _publish_outputs(self):
         self.fw.set_output("Online", 1 if self._online else 0)
+        # State stays a direct write — it's a short enumerable string
+        # ("Playing" / "Paused" / …) that wouldn't usefully scroll.
         self.fw.set_output("State", to_iso_bytes(self._last_state))
         # Discrete state booleans — exactly one is 1 at any time when
         # we have a known state (all 0 when state hasn't been read yet).
@@ -1869,17 +1964,20 @@ class LogicModule:
             self.fw.set_output("Volume", float(self._last_volume))
         if self._last_mute is not None:
             self.fw.set_output("Mute", 1 if self._last_mute else 0)
-        self.fw.set_output("Title", to_iso_bytes(self._last_title))
-        self.fw.set_output("Artist", to_iso_bytes(self._last_artist))
-        self.fw.set_output("Album", to_iso_bytes(self._last_album))
+        # Long-text outputs route through _publish_text so they can
+        # scroll marquee-style when the integrator has opted in via
+        # the Admin's marqueeMaxLength setting.
+        self._publish_text("Title", self._last_title)
+        self._publish_text("Artist", self._last_artist)
+        self._publish_text("Album", self._last_album)
         self.fw.set_output("AlbumArtURI", to_iso_bytes(self._last_album_art))
         self.fw.set_output("ShuffleState", 1 if self._last_shuffle else 0)
         self.fw.set_output("RepeatState", 1 if self._last_repeat else 0)
-        self.fw.set_output("GroupInfo", to_iso_bytes(self._group_info_string()))
+        self._publish_text("GroupInfo", self._group_info_string())
         self.fw.set_output("IsCoordinator", 0 if self._last_group_master else 1)
         self.fw.set_output("ActiveStation", float(self._active_station))
-        self.fw.set_output("ActiveStationName", to_iso_bytes(self._active_station_name))
-        self.fw.set_output("ZoneName", to_iso_bytes(self._last_zone_name))
+        self._publish_text("ActiveStationName", self._active_station_name)
+        self._publish_text("ZoneName", self._last_zone_name)
 
     def _publish_state_flags(self):
         s = self._last_state
@@ -1899,7 +1997,7 @@ class LogicModule:
         self.fw.set_output("RepeatAllowed",  1 if a["repeat"]  else 0)
 
     def _publish_zone_name(self):
-        self.fw.set_output("ZoneName", to_iso_bytes(self._last_zone_name))
+        self._publish_text("ZoneName", self._last_zone_name)
 
     def _publish_sub_state(self):
         now = time.time()
@@ -2001,7 +2099,7 @@ class LogicModule:
         self._active_station = idx
         self._active_station_name = name or ""
         self.fw.set_output("ActiveStation", float(idx))
-        self.fw.set_output("ActiveStationName", to_iso_bytes(self._active_station_name))
+        self._publish_text("ActiveStationName", self._active_station_name)
 
     def _mark_active_station_loading(self, idx, name):
         """Optimistic in-flight update for the ActiveStationName output.
@@ -2018,12 +2116,12 @@ class LogicModule:
         label = "Loading: " + (name or "")
         self._active_station_name = label
         self.fw.set_output("ActiveStation", float(idx))
-        self.fw.set_output("ActiveStationName", to_iso_bytes(label))
+        self._publish_text("ActiveStationName", label)
 
     def _write_error(self, code):
         if self.debug is not None:
             self.debug.set("Last error", to_iso_bytes(str(code)))
-        self.fw.set_output("LastError", to_iso_bytes(str(code)))
+        self._publish_text("LastError", str(code))
 
     def _inc_debug(self, key):
         if self.debug is not None:

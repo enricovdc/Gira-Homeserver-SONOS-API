@@ -2,7 +2,7 @@
 
 Run through this list against real Sonos hardware when commissioning
 the HSL3 modules, after a Sonos firmware update, or after network
-changes. The 127 unit tests under `tests/test_logic_modules.py` cover
+changes. The 135 unit tests under `tests/test_logic_modules.py` cover
 the pure logic against a stubbed framework; this checklist is for
 hardware-in-the-loop validation.
 
@@ -132,6 +132,29 @@ Trigger the corresponding KNX address (or simulate the input in Experte):
       every 10 s while the rest stay at the project default.
 - [ ] Clear the override (empty input). The player reverts to the
       project default within one on_calc cycle.
+
+## Marquee (long text scrolling)
+
+- [ ] In the Admin web UI's *Player Defaults*, set `Max text length`
+      to 15. Save. Within ~60 s, every Player block now scrolls any
+      long Title / Artist / Album / GroupInfo / ActiveStationName /
+      ZoneName / LastError value through a 15-character window at
+      1 char/second.
+- [ ] Play a track whose title is short (e.g. "Yesterday"). The
+      `Title` output stays static — no scrolling needed.
+- [ ] Play a track with a long title (e.g. "Bohemian Rhapsody
+      Remastered 2011"). Watch the `Title` output: it should shift
+      one character every second, looping with a three-space gap
+      between repetitions.
+- [ ] Trigger a different preset. The scroll position resets to 0
+      so the new title is shown from its first character.
+- [ ] On a single player card open *Advanced overrides* and set
+      `Max text length` = 30. That player now scrolls only texts
+      longer than 30 chars; the rest of the system stays at 15.
+- [ ] Clear the override (empty input). The player reverts to the
+      project default.
+- [ ] Set the project default to 0. Marquee disables; all text
+      outputs emit at their full length.
 
 ## Sound Enhancement companion (LBS 22002)
 

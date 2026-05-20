@@ -332,6 +332,34 @@ Trade-offs to be aware of:
   unchanged until the player produces a real reading. That's the
   intended SBC behaviour.
 
+## Long text outputs — marquee scroll
+
+The `Title`, `Artist`, `Album`, `ActiveStationName`, `ZoneName`,
+`GroupInfo`, and `LastError` outputs route through a single helper
+that can optionally scroll long values marquee-style. KNX text-field
+widgets in Gira QuadClient typically have a fixed visible width;
+when a track title is longer than that width, the integrator
+historically had to truncate or accept clipping.
+
+Configure the maximum visible length once in the Admin web UI's
+*Player Defaults* (project-wide) or per-player in *Advanced
+overrides*. Field name: **Max text length**. Behaviour:
+
+- **0 (default)** — marquee disabled. Text is emitted at its full
+  length; the visualisation handles overflow.
+- **`N > 0`** — any output whose text exceeds N characters scrolls
+  one character per second through the full value, with a three-
+  space separator between repetitions. Texts at or below N
+  characters emit as-is, no scrolling.
+
+The new text changes mid-scroll (e.g. a track change) reset the
+scroll position to 0 so the visualisation always reads the new
+title from the start. SBC at the view level means KNX only sees a
+broadcast when the visible substring actually changes.
+
+Minimum window the Admin will accept is 4 characters so the
+scrolling content stays readable. Set to 0 to fully disable.
+
 ## Verifying the wiring
 
 After downloading the project to the HomeServer:

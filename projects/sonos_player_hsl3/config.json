@@ -65,7 +65,8 @@
     ],
     "stores": [],
     "timers": [
-      { "identifier": "Tick" }
+      { "identifier": "Tick" },
+      { "identifier": "Marquee" }
     ],
     "scripts": [
       { "filename": "hsl3_22000_sonos_player.py" }
