@@ -1285,6 +1285,25 @@ class LogicModule:
             self.fw.run_in_context(self._write_error, ("PLAYLIST_NO_UUID",))
             return
 
+        # If this player is currently a slave (its transport follows
+        # another player via x-rincon:UUID), queue operations are
+        # either rejected or silently no-op — the slave doesn't own
+        # the playing queue. Detach first via
+        # BecomeCoordinatorOfStandaloneGroup so the queue dance below
+        # operates on this player's own (empty) queue and the
+        # subsequent SetAVTransportURI(x-rincon-queue:UUID#0) switch
+        # actually plays. Idempotent on non-slaves, so safe to call
+        # unconditionally; we gate on _last_group_master only to skip
+        # the wasted SOAP when we're already standalone.
+        if self._last_group_master:
+            self._soap(
+                "AVTransport", "BecomeCoordinatorOfStandaloneGroup",
+                ENV_STANDALONE,
+            )
+            # Optimistic clear so a chained second action this cycle
+            # doesn't try to detach again. The next NOTIFY confirms.
+            self._last_group_master = ""
+
         # Step 1: clear the existing queue. Best-effort — some Sonos
         # firmware variants return an empty 200 even on a previously
         # empty queue, so we don't treat a 'fault' here as fatal.
@@ -1424,6 +1443,16 @@ class LogicModule:
                                   .replace("{meta}", "")
             ok, _b, err = self._soap("AVTransport", "SetAVTransportURI", envelope)
             if ok:
+                # Optimistic update — the AVTransport NOTIFY confirming
+                # the slave state can take up to a second. If the user
+                # immediately triggers a playlist preset after this
+                # join, _play_via_queue would otherwise see
+                # _last_group_master still empty and skip the
+                # standalone-detach step (and the queue dance would
+                # silently fail because the slave doesn't own its
+                # transport). Update the state now from the URI's
+                # master UUID so the next action sees the truth.
+                self._last_group_master = uri[len("x-rincon:"):]
                 self.fw.run_in_context(self._mark_active_station, (active_idx, active_name))
             else:
                 self.fw.run_in_context(self._write_error, (err or "JOIN_FAILED",))

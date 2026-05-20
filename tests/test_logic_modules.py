@@ -1971,6 +1971,85 @@ class TestPlayerStationFromAdmin(unittest.TestCase):
         self.assertFalse(c("http://stream.example.com/r1.mp3"))
         self.assertFalse(c(""))
 
+    def test_play_via_queue_detaches_slave_first(self):
+        """When the player is currently a slave (CurrentTrackURI =
+        x-rincon:MASTER), queue operations get silently rejected
+        because the slave's transport follows the master. The fix:
+        BecomeCoordinatorOfStandaloneGroup must run BEFORE the queue
+        dance so the player owns its own queue."""
+        fw = StubFramework()
+        lm = self.player.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._host = "10.0.0.1"
+        lm._uuid = "RINCON_THIS"
+        lm._last_group_master = "RINCON_MASTER"  # currently a slave
+        calls = []
+        lm._soap = lambda s, a, e: (calls.append(a) or (True, "", ""))
+        lm._play_via_queue(
+            "x-rincon-cpcontainer:1006206cspotify:playlist:abc",
+            "<DIDL-Lite/>",
+            5, "My Playlist",
+        )
+        # BecomeCoordinatorOfStandaloneGroup MUST come first, before
+        # any queue manipulation.
+        self.assertEqual(calls[0], "BecomeCoordinatorOfStandaloneGroup")
+        self.assertEqual(calls[1:], [
+            "RemoveAllTracksFromQueue",
+            "AddURIToQueue",
+            "SetAVTransportURI",
+            "Play",
+        ])
+        # And the optimistic slave-state clear happened — a chained
+        # call this cycle wouldn't try to detach a second time.
+        self.assertEqual(lm._last_group_master, "")
+
+    def test_play_via_queue_skips_detach_when_already_standalone(self):
+        """No wasted SOAP on a player that's already coordinator /
+        standalone. _last_group_master = "" → skip the detach step."""
+        fw = StubFramework()
+        lm = self.player.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._host = "10.0.0.1"
+        lm._uuid = "RINCON_THIS"
+        lm._last_group_master = ""
+        calls = []
+        lm._soap = lambda s, a, e: (calls.append(a) or (True, "", ""))
+        lm._play_via_queue(
+            "x-rincon-cpcontainer:foo",
+            "",
+            1, "Test",
+        )
+        self.assertNotIn("BecomeCoordinatorOfStandaloneGroup", calls)
+        self.assertEqual(calls, [
+            "RemoveAllTracksFromQueue",
+            "AddURIToQueue",
+            "SetAVTransportURI",
+            "Play",
+        ])
+
+    def test_join_preset_sets_optimistic_slave_state(self):
+        """A Join preset (x-rincon:UUID) dispatches SetAVTransportURI
+        and the NOTIFY confirming the slave state can lag the action
+        by ~1 s. Optimistically update _last_group_master so an
+        immediately-following playlist trigger sees the slave state
+        and detaches before queue ops."""
+        with self.admin._registry_lock:
+            self.admin._stations.clear()
+            self.admin._stations["j"] = {
+                "id": "j", "name": "Join Kitchen", "type": "join",
+                "uri": "x-rincon:RINCON_KITCHEN", "metadata": "",
+            }
+        fw = StubFramework()
+        lm = self.player.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._host = "10.0.0.1"
+        lm._last_group_master = ""  # we believe we're standalone
+        lm._soap = lambda s, a, e: (True, "", "")
+        lm._action_start_radio(1)
+        # _last_group_master now reflects the new slave state
+        # without waiting for the NOTIFY round-trip.
+        self.assertEqual(lm._last_group_master, "RINCON_KITCHEN")
+
     def test_play_via_queue_calls_required_soap_actions(self):
         """Container playback must issue the queue-and-play SOAP sequence
         (RemoveAllTracksFromQueue → AddURIToQueue → SetAVTransportURI
