@@ -1050,6 +1050,8 @@ details.group-add .row { margin-top: 6px; }
 .fav-type { font-size: 10px; text-transform: uppercase; color: #707070;
             letter-spacing: 0.5px; }
 .fav-title { font-size: 12px; color: #202020; word-break: break-word; }
+.fav-actions { display: flex; gap: 4px; flex-wrap: nowrap; }
+.fav-actions button.small { white-space: nowrap; }
 
 /* Two-column "grid" used by the Cloud section */
 .grid { display: grid; grid-template-columns: 224px 1fr; gap: 6px 12px;
@@ -1863,8 +1865,31 @@ document.addEventListener('click', async (ev) => {
       // Encoded payload {title, uri, metadata} (base64-JSON, URI-safe).
       const payload = JSON.parse(decodeURIComponent(escape(atob(t.dataset.addFavStation))));
       await api('POST', '/api/stations', payload);
-      toast('Added: ' + payload.name);
+      toast('Added to global: ' + payload.name);
       refreshStations();
+    }
+    if (t.dataset.addFavPlayer) {
+      // Add a favorite as a per-player preset on this card's player.
+      // Walk slots 1..10, pick the first free one. If every slot is
+      // taken surface a clear error so the user knows to delete one
+      // first.
+      const pid = t.dataset.pid;
+      const payload = JSON.parse(decodeURIComponent(escape(atob(t.dataset.addFavPlayer))));
+      const cur = await api('GET', '/api/players/' + encodeURIComponent(pid) + '/presets');
+      const used = new Set((cur.presets || []).map(p => p.slot));
+      const total = cur.slots || 10;
+      let free = 0;
+      for (let n = 1; n <= total; n++) {
+        if (!used.has(n)) { free = n; break; }
+      }
+      if (!free) {
+        toast('No free per-player slot on this player (all ' + total + ' are taken). Remove one first.', true);
+        return;
+      }
+      await api('PUT', '/api/players/' + encodeURIComponent(pid) +
+                       '/presets/' + free, payload);
+      toast('Added to slot ' + free + ': ' + payload.name);
+      refreshPlayers();
     }
   } catch (e) { toast(e.message, true); }
 });
@@ -1930,10 +1955,18 @@ async function toggleFavorites(pid, btn) {
       const payload = btoa(unescape(encodeURIComponent(JSON.stringify({
         name: f.title, uri: f.uri, metadata: f.metadata, type: f.type || ''
       }))));
+      // Two add buttons per favorite: one drops the item into the global
+      // library (shared across every player, indices 11+), the other
+      // assigns it to the next free slot on THIS player (indices 1..10,
+      // local to this card). pid is encoded on the second button so the
+      // handler knows which player to write to.
       html += '<div class="fav-row">' +
                 '<span class="fav-type">' + esc(f.type || 'other') + '</span>' +
                 '<span class="fav-title">' + esc(f.title) + '</span>' +
-                '<button class="small" data-add-fav-station="' + payload + '">Add as preset</button>' +
+                '<span class="fav-actions">' +
+                  '<button class="small" data-add-fav-station="' + payload + '" title="Add to the global preset library (shared by every player)">Add as global</button>' +
+                  '<button class="small secondary" data-add-fav-player="' + payload + '" data-pid="' + esc(pid) + '" title="Add to the next free per-player slot on this player">Add as player</button>' +
+                '</span>' +
               '</div>';
     }
   }
