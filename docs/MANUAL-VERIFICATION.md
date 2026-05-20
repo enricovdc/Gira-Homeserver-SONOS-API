@@ -2,7 +2,7 @@
 
 Run through this list against real Sonos hardware when commissioning
 the HSL3 modules, after a Sonos firmware update, or after network
-changes. The 141 unit tests under `tests/test_logic_modules.py` cover
+changes. The 143 unit tests under `tests/test_logic_modules.py` cover
 the pure logic against a stubbed framework; this checklist is for
 hardware-in-the-loop validation.
 
@@ -95,6 +95,12 @@ Trigger the corresponding KNX address (or simulate the input in Experte):
       `ActiveStationName` output should immediately show
       `Loading: <name>` and then drop the prefix once the player
       switches to the new source.
+- [ ] Fast-press `PresetNextPrev` (e.g. 1 / 0 / 1 / 0 within a
+      second) while a slow Join preset is mid-dispatch. The player
+      should land on the FINAL preset selected, not on an
+      intermediate one. `ActiveStationName` matches the final
+      preset's name; no leftover `Loading:` prefix. Verifies the
+      preset-dispatch generation / version-bail behaviour.
 
 ## Track-metadata refresh
 

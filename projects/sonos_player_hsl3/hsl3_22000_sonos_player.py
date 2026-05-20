@@ -871,6 +871,15 @@ class LogicModule:
         # every button as unavailable rather than incorrectly allowing them.
         self._last_allowed = dict(_DEFAULT_ALLOWED)
         self._uuid = ""           # Sonos RINCON UUID — needed to build queue URI
+        # Preset-dispatch generation counter. on_calc bumps it for
+        # each new preset request (StartRadio / StartRadioName /
+        # PresetNextPrev); the worker captures the value at dispatch
+        # time and bails if a newer request has overtaken it. The
+        # lock serialises preset workers so two SOAP sequences never
+        # interleave — important when a slow-to-complete Join preset
+        # is followed by a rapid Next press to a different preset.
+        self._preset_version = 0
+        self._preset_lock = threading.Lock()
         # Marquee scroll state for the long text outputs. Keyed by
         # output name. Each entry has the full text, the current
         # scroll position, and the last view actually emitted (SBC
@@ -1025,14 +1034,24 @@ class LogicModule:
         # the per-player StationNUri inputs. Two routes:
         #   - StartRadio     (number) selects by alphabetical index 1..N
         #   - StartRadioName (string) selects by name (case-insensitive)
+        # Every preset dispatch bumps the version BEFORE the worker
+        # is spawned, so even rapid fire (PresetNextPrev mashed) gives
+        # each dispatch a strictly-monotonic generation tag. The
+        # worker bails if its tag is no longer the latest.
         if inputs["StartRadio"].changed:
             idx = int(inputs["StartRadio"].value or 0)
             if idx > 0:
-                self._run_control_threaded(lambda: self._action_start_radio(idx))
+                v = self._bump_preset_version()
+                self._run_control_threaded(
+                    lambda i=idx, ver=v: self._action_start_radio(i, version=ver)
+                )
         if inputs["StartRadioName"].changed:
             name = to_str(inputs["StartRadioName"].value).strip()
             if name:
-                self._run_control_threaded(lambda: self._action_start_radio(name))
+                v = self._bump_preset_version()
+                self._run_control_threaded(
+                    lambda n=name, ver=v: self._action_start_radio(n, version=ver)
+                )
 
         # Group presets — dispatch by index or name.
         if inputs["GroupPreset"].changed:
@@ -1073,8 +1092,9 @@ class LogicModule:
                 self._run_control_threaded(self._action_previous)
         if inputs["PresetNextPrev"].changed:
             direction = 1 if inputs["PresetNextPrev"].value else -1
+            v = self._bump_preset_version()
             self._run_control_threaded(
-                lambda d=direction: self._action_step_preset(d)
+                lambda d=direction, ver=v: self._action_step_preset(d, version=ver)
             )
 
         # PlaySound — write the alphabetical index of a sound in the
@@ -1177,6 +1197,22 @@ class LogicModule:
         self._callback_base = cb
 
     # ----- Action wrappers -------------------------------------------------
+
+    def _bump_preset_version(self):
+        """Increment and return the preset-dispatch generation counter.
+        Called from on_calc (node context) before spawning a worker;
+        the worker captures the returned value and treats any later
+        bump as a signal that its request has been superseded."""
+        self._preset_version += 1
+        return self._preset_version
+
+    def _preset_still_current(self, version):
+        """True when the worker still holds the latest preset
+        intention. Workers call this before every SOAP and before
+        every state-mutating output so a fast Next-press sequence
+        doesn't leave the integration with a stale ActiveStationName
+        or a Join half-applied on top of a now-stale preset."""
+        return version is None or version == self._preset_version
 
     def _run_control_threaded(self, fn):
         """Run a control action in a thread so on_calc does not block on HTTP."""
@@ -1330,7 +1366,7 @@ class LogicModule:
             return None
         return extract_response_field(body, "Actions")
 
-    def _play_via_queue(self, uri, metadata, active_idx, active_name=""):
+    def _play_via_queue(self, uri, metadata, active_idx, active_name="", version=None):
         """Queue-and-play path for container URIs (playlist / album /
         Sonos saved queue). The standard Sonos sequence is:
 
@@ -1341,10 +1377,18 @@ class LogicModule:
 
         queue_uri is "x-rincon-queue:<this-player's-UUID>#0" — Sonos
         won't accept a relative form, so we need the player's UUID.
-        Cached in self._uuid (fetched from Admin or device XML)."""
+        Cached in self._uuid (fetched from Admin or device XML).
+
+        ``version`` is the preset-dispatch generation tag — this
+        method is multi-SOAP so a fast preset-switching sequence
+        could otherwise leave the queue half-built. We check the
+        tag before each SOAP and bail when superseded; the next
+        action's _play_via_queue (or whichever branch fires) will
+        rebuild the queue from scratch."""
         uuid = self._resolve_uuid()
         if not uuid:
-            self.fw.run_in_context(self._write_error, ("PLAYLIST_NO_UUID",))
+            if self._preset_still_current(version):
+                self.fw.run_in_context(self._write_error, ("PLAYLIST_NO_UUID",))
             return
 
         # If this player is currently a slave (its transport follows
@@ -1365,11 +1409,15 @@ class LogicModule:
             # Optimistic clear so a chained second action this cycle
             # doesn't try to detach again. The next NOTIFY confirms.
             self._last_group_master = ""
+            if not self._preset_still_current(version):
+                return
 
         # Step 1: clear the existing queue. Best-effort — some Sonos
         # firmware variants return an empty 200 even on a previously
         # empty queue, so we don't treat a 'fault' here as fatal.
         self._soap("AVTransport", "RemoveAllTracksFromQueue", ENV_REMOVE_QUEUE)
+        if not self._preset_still_current(version):
+            return
 
         # Step 2: enqueue the container with its metadata. For
         # cloud-service containers (cpcontainer) the metadata carries the
@@ -1378,6 +1426,8 @@ class LogicModule:
             .replace("{uri}", _xml_escape(uri)) \
             .replace("{meta}", _xml_escape(metadata))
         ok, _b, err = self._soap("AVTransport", "AddURIToQueue", env_add)
+        if not self._preset_still_current(version):
+            return
         if not ok:
             self.fw.run_in_context(self._write_error, (err or "ADD_QUEUE_FAILED",))
             return
@@ -1388,12 +1438,16 @@ class LogicModule:
             .replace("{uri}", _xml_escape(queue_uri)) \
             .replace("{meta}", "")
         ok, _b, err = self._soap("AVTransport", "SetAVTransportURI", env_switch)
+        if not self._preset_still_current(version):
+            return
         if not ok:
             self.fw.run_in_context(self._write_error, (err or "QUEUE_TRANSPORT_FAILED",))
             return
 
         # Step 4: play.
         ok, _b, err = self._soap("AVTransport", "Play", ENV_PLAY)
+        if not self._preset_still_current(version):
+            return
         if not ok:
             self.fw.run_in_context(self._write_error, (err or "PLAY_FAILED",))
             return
@@ -1457,7 +1511,7 @@ class LogicModule:
         if not ok:
             self.fw.run_in_context(self._write_error, (err or "UNGROUP_FAILED",))
 
-    def _action_start_radio(self, spec):
+    def _action_start_radio(self, spec, version=None):
         """Start a preset identified either by a positive integer
         (alphabetical index into the Admin preset library) OR by the
         preset name (case-insensitive lookup in the same library).
@@ -1467,107 +1521,150 @@ class LogicModule:
         for URIs and the DIDL-Lite metadata required for Sonos cloud
         favorites (TuneIn, Spotify, …). Errors surface as
         PRESET_NOT_FOUND on the LastError output.
+
+        ``version`` is the preset-dispatch generation tag captured by
+        on_calc. The lock serialises overlapping presets so two SOAP
+        sequences never interleave; the version check at every SOAP
+        boundary causes a superseded action to bail without firing
+        more SOAP or writing stale outputs.
         """
-        # The Admin block's preset library is the single source of
-        # truth — there are no per-player preset slots anymore. If no
-        # match exists in the library (admin not loaded, or unknown
-        # spec) we surface PRESET_NOT_FOUND.
-        admin_rec = _lookup_station_via_admin(spec)
-        if not admin_rec or not admin_rec.get("uri"):
-            self.fw.run_in_context(
-                self._write_error,
-                ("PRESET_NOT_FOUND: {}".format(spec),),
-            )
-            return
-        uri = admin_rec["uri"]
-        metadata = admin_rec.get("metadata") or ""
-        # ``index`` and ``name`` come from Admin's get_station so the
-        # ActiveStation + ActiveStationName outputs are stable whether
-        # the caller used the numeric index or the preset name.
-        active_idx = int(admin_rec.get("index") or 0)
-        active_name = admin_rec.get("name", "") or ""
-        # Optimistic feedback: post "Loading: <name>" before the SOAP
-        # dispatch starts so the visualisation moves immediately when
-        # the integrator triggers PresetNextPrev. Preset playback
-        # involves multi-step SOAP (join URIs do per-member calls,
-        # queue playback does Remove + Add + SwitchTransport + Play),
-        # and without this hook ActiveStationName would otherwise
-        # only update after the whole dispatch completed.
-        self.fw.run_in_context(self._mark_active_station_loading,
-                               (active_idx, active_name))
+        # Serialise overlapping preset workers. A second PresetNextPrev
+        # press while a slow Join is still mid-dispatch waits here
+        # until the join finishes; the version check below then makes
+        # the older worker (held back by the lock OR the newer one
+        # that overtook it via on_calc's version bump) bail before
+        # touching SOAP again.
+        with self._preset_lock:
+            if not self._preset_still_current(version):
+                return  # overtaken by a newer preset request
+            # The Admin block's preset library is the single source
+            # of truth — there are no per-player preset slots anymore.
+            # If no match exists in the library (admin not loaded, or
+            # unknown spec) we surface PRESET_NOT_FOUND.
+            admin_rec = _lookup_station_via_admin(spec)
+            if not admin_rec or not admin_rec.get("uri"):
+                if self._preset_still_current(version):
+                    self.fw.run_in_context(
+                        self._write_error,
+                        ("PRESET_NOT_FOUND: {}".format(spec),),
+                    )
+                return
+            uri = admin_rec["uri"]
+            metadata = admin_rec.get("metadata") or ""
+            # ``index`` and ``name`` come from Admin's get_station so
+            # the ActiveStation + ActiveStationName outputs are stable
+            # whether the caller used the numeric index or the preset
+            # name.
+            active_idx = int(admin_rec.get("index") or 0)
+            active_name = admin_rec.get("name", "") or ""
+            # Optimistic feedback: post "Loading: <name>" before the
+            # SOAP dispatch starts so the visualisation moves
+            # immediately when the integrator triggers PresetNextPrev.
+            # Preset playback involves multi-step SOAP (join URIs do
+            # per-member calls, queue playback does Remove + Add +
+            # SwitchTransport + Play), and without this hook
+            # ActiveStationName would otherwise only update after the
+            # whole dispatch completed.
+            self.fw.run_in_context(self._mark_active_station_loading,
+                                   (active_idx, active_name))
+            if not self._preset_still_current(version):
+                return
 
-        # Group-join preset: the URI is "x-rincon:RINCON_<master>". Sending
-        # it via SetAVTransportURI makes this player a slave of the
-        # master's zone group; the slave then auto-inherits the master's
-        # transport state, so we deliberately DON'T issue Play afterwards.
-        if _is_group_join_uri(uri):
-            envelope = ENV_SET_URI.replace("{uri}", _xml_escape(uri)) \
-                                  .replace("{meta}", "")
-            ok, _b, err = self._soap("AVTransport", "SetAVTransportURI", envelope)
-            if ok:
-                # Optimistic update — the AVTransport NOTIFY confirming
-                # the slave state can take up to a second. If the user
-                # immediately triggers a playlist preset after this
-                # join, _play_via_queue would otherwise see
-                # _last_group_master still empty and skip the
-                # standalone-detach step (and the queue dance would
-                # silently fail because the slave doesn't own its
-                # transport). Update the state now from the URI's
-                # master UUID so the next action sees the truth.
-                self._last_group_master = uri[len("x-rincon:"):]
-                self.fw.run_in_context(self._mark_active_station, (active_idx, active_name))
-            else:
-                self.fw.run_in_context(self._write_error, (err or "JOIN_FAILED",))
-            return
-
-        # Containers (Spotify/Apple playlists, Sonos saved queues, …)
-        # cannot be SetAVTransportURI'd directly — they must be added to
-        # the player's queue first, then the transport switches to the
-        # queue URI. Branch here.
-        if _is_container_uri(uri):
-            self._play_via_queue(uri, metadata, active_idx, active_name)
-            return
-
-        if metadata:
-            # Cloud-bound favorite: the music-service binding (TuneIn,
-            # Spotify…) lives inside the metadata. Do NOT try the empty-
-            # metadata fallback — Sonos would lose the service binding.
-            envelope = ENV_SET_URI.replace("{uri}", _xml_escape(uri)) \
-                                  .replace("{meta}", _xml_escape(metadata))
-            ok, _b, err = self._soap("AVTransport", "SetAVTransportURI", envelope)
-            if ok:
-                play_ok, _b2, play_err = self._soap("AVTransport", "Play", ENV_PLAY)
-                if play_ok:
+            # Group-join preset: the URI is "x-rincon:RINCON_<master>".
+            # Sending it via SetAVTransportURI makes this player a
+            # slave of the master's zone group; the slave then auto-
+            # inherits the master's transport state, so we deliberately
+            # DON'T issue Play afterwards.
+            if _is_group_join_uri(uri):
+                envelope = ENV_SET_URI.replace("{uri}", _xml_escape(uri)) \
+                                      .replace("{meta}", "")
+                ok, _b, err = self._soap("AVTransport", "SetAVTransportURI", envelope)
+                if not self._preset_still_current(version):
+                    return
+                if ok:
+                    # Optimistic update — the AVTransport NOTIFY
+                    # confirming the slave state can take up to a
+                    # second. If the user immediately triggers a
+                    # playlist preset after this join,
+                    # _play_via_queue would otherwise see
+                    # _last_group_master still empty and skip the
+                    # standalone-detach step (and the queue dance
+                    # would silently fail because the slave doesn't
+                    # own its transport). Update the state now from
+                    # the URI's master UUID so the next action sees
+                    # the truth.
+                    self._last_group_master = uri[len("x-rincon:"):]
                     self.fw.run_in_context(self._mark_active_station, (active_idx, active_name))
                 else:
-                    self.fw.run_in_context(self._write_error, (play_err,))
+                    self.fw.run_in_context(self._write_error, (err or "JOIN_FAILED",))
                 return
-            self.fw.run_in_context(self._write_error, (err or "RADIO_START_FAILED",))
-            return
 
-        # Direct stream (manual URI): the original firmware-2026-resilient
-        # fallback ladder — empty metadata first, then raw URI.
-        for candidate in (normalize_radio_uri(uri), uri):
-            envelope = ENV_SET_URI.replace("{uri}", _xml_escape(candidate)) \
-                                  .replace("{meta}", "")
-            ok, _body, err = self._soap("AVTransport", "SetAVTransportURI", envelope)
-            if ok:
-                play_ok, _b, play_err = self._soap("AVTransport", "Play", ENV_PLAY)
-                if play_ok:
-                    self.fw.run_in_context(self._mark_active_station, (active_idx, active_name))
-                else:
-                    self.fw.run_in_context(self._write_error, (play_err,))
+            # Containers (Spotify/Apple playlists, Sonos saved queues,
+            # …) cannot be SetAVTransportURI'd directly — they must be
+            # added to the player's queue first, then the transport
+            # switches to the queue URI. Branch here.
+            if _is_container_uri(uri):
+                self._play_via_queue(uri, metadata, active_idx, active_name,
+                                     version=version)
                 return
-            if err not in META_REJECT_CODES:
-                break
-        self.fw.run_in_context(self._write_error, ("RADIO_START_FAILED",))
 
-    def _action_step_preset(self, direction):
+            if metadata:
+                # Cloud-bound favorite: the music-service binding
+                # (TuneIn, Spotify…) lives inside the metadata. Do NOT
+                # try the empty-metadata fallback — Sonos would lose
+                # the service binding.
+                envelope = ENV_SET_URI.replace("{uri}", _xml_escape(uri)) \
+                                      .replace("{meta}", _xml_escape(metadata))
+                ok, _b, err = self._soap("AVTransport", "SetAVTransportURI", envelope)
+                if not self._preset_still_current(version):
+                    return
+                if ok:
+                    play_ok, _b2, play_err = self._soap("AVTransport", "Play", ENV_PLAY)
+                    if not self._preset_still_current(version):
+                        return
+                    if play_ok:
+                        self.fw.run_in_context(self._mark_active_station, (active_idx, active_name))
+                    else:
+                        self.fw.run_in_context(self._write_error, (play_err,))
+                    return
+                self.fw.run_in_context(self._write_error, (err or "RADIO_START_FAILED",))
+                return
+
+            # Direct stream (manual URI): the original firmware-2026-
+            # resilient fallback ladder — empty metadata first, then
+            # raw URI.
+            for candidate in (normalize_radio_uri(uri), uri):
+                envelope = ENV_SET_URI.replace("{uri}", _xml_escape(candidate)) \
+                                      .replace("{meta}", "")
+                ok, _body, err = self._soap("AVTransport", "SetAVTransportURI", envelope)
+                if not self._preset_still_current(version):
+                    return
+                if ok:
+                    play_ok, _b, play_err = self._soap("AVTransport", "Play", ENV_PLAY)
+                    if not self._preset_still_current(version):
+                        return
+                    if play_ok:
+                        self.fw.run_in_context(self._mark_active_station, (active_idx, active_name))
+                    else:
+                        self.fw.run_in_context(self._write_error, (play_err,))
+                    return
+                if err not in META_REJECT_CODES:
+                    break
+            self.fw.run_in_context(self._write_error, ("RADIO_START_FAILED",))
+
+    def _action_step_preset(self, direction, version=None):
         """Step one position through the Admin preset library and start
         the resulting preset. ``direction`` is +1 (next) or -1 (prev).
         Wraps at both ends so a single 1-bit KNX address can cycle
         through the whole library. NO_PRESETS surfaces on LastError when
-        the library is empty or Admin isn't loaded."""
+        the library is empty or Admin isn't loaded.
+
+        ``version`` is the generation tag captured by on_calc; passed
+        through to _action_start_radio so a fast Next-press sequence
+        only commits the final preset rather than racing through
+        every intermediate one."""
+        if not self._preset_still_current(version):
+            return  # superseded between dispatch and worker start
         count = _admin_station_count()
         if count <= 0:
             self.fw.run_in_context(self._write_error, ("NO_PRESETS",))
@@ -1577,7 +1674,7 @@ class LogicModule:
             next_idx = 1 if current <= 0 else (current % count) + 1
         else:
             next_idx = count if current <= 1 else current - 1
-        self._action_start_radio(next_idx)
+        self._action_start_radio(next_idx, version=version)
 
     # ----- Sound notifications ---------------------------------------------
 

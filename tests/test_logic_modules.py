@@ -1545,6 +1545,72 @@ class TestPlayerStationFromAdmin(unittest.TestCase):
                     mod._groups.clear()
                     mod._players.clear()
 
+    def test_action_start_radio_skips_soap_when_superseded(self):
+        """Fast Next/Prev presses race: an older preset worker is
+        still running when on_calc bumps _preset_version for the next
+        press. The older worker must detect the bump and bail without
+        firing SOAP. Reproduces the user's reported case: a slow Join
+        preset stuck in flight while the user pushes Next."""
+        with self.admin._registry_lock:
+            self.admin._stations.clear()
+            self.admin._stations["s"] = {
+                "id": "s", "name": "BBC Radio 1",
+                "uri": "http://stream.bbc.co.uk/r1.mp3",
+                "metadata": "",
+            }
+        fw = StubFramework()
+        lm = self.player.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._host = "10.0.0.5"
+        # We're worker version 1 — but the test simulates that a
+        # newer press (version 2) has already bumped the counter
+        # while we were queued. The worker must check on entry and
+        # bail without any SOAP traffic.
+        lm._preset_version = 2
+        calls = []
+        lm._soap = lambda s, a, e: (calls.append(a) or (True, "", ""))
+        lm._action_start_radio(1, version=1)  # stale dispatch
+        self.assertEqual(calls, [],
+            "stale preset action must not fire SOAP")
+        # And the LastError is not touched either — the newer
+        # action will surface its own outcome.
+        self.assertNotIn("LastError", fw.outputs)
+
+    def test_action_start_radio_skips_mark_when_superseded_post_soap(self):
+        """Even when the SOAP was already in flight before the newer
+        press bumped the version, the post-SOAP _mark_active_station
+        write must be suppressed so the visualisation doesn't briefly
+        flip back to the superseded preset's name."""
+        with self.admin._registry_lock:
+            self.admin._stations.clear()
+            self.admin._stations["s"] = {
+                "id": "s", "name": "BBC Radio 1",
+                "uri": "http://stream.bbc.co.uk/r1.mp3",
+                "metadata": "",
+            }
+        fw = StubFramework()
+        lm = self.player.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._host = "10.0.0.5"
+        lm._preset_version = 1
+        # Custom _soap that bumps the version mid-flight to simulate
+        # a newer press landing while our SetAVTransportURI was
+        # already out on the wire.
+        def fake_soap(service, action, env):
+            if action == "SetAVTransportURI":
+                lm._preset_version = 2  # newer press arrives
+            return (True, "", "")
+        lm._soap = fake_soap
+        lm._action_start_radio(1, version=1)
+        # The optimistic "Loading: BBC Radio 1" landed (before the
+        # SOAP), but the post-SOAP _mark_active_station that would
+        # drop the prefix to "BBC Radio 1" must have been suppressed
+        # — the newer preset will fill in its own clean name.
+        self.assertEqual(fw.outputs.get("ActiveStationName"),
+                         b"Loading: BBC Radio 1",
+                         "expected the Loading prefix to still be on the "
+                         "output (post-SOAP clean mark was suppressed)")
+
     def test_action_start_radio_publishes_loading_then_resolved(self):
         """Multi-step preset dispatch (join URIs, queue playback) can
         take seconds; ActiveStationName must move immediately to
@@ -1630,7 +1696,7 @@ class TestPlayerStationFromAdmin(unittest.TestCase):
         # _action_start_radio fans out to SOAP — short-circuit it and
         # just record which index it was called with.
         calls = []
-        lm._action_start_radio = lambda idx: calls.append(idx)
+        lm._action_start_radio = lambda idx, version=None: calls.append(idx)
         # First "next" from a never-started player → preset 1.
         lm._active_station = 0
         lm._action_step_preset(+1)
