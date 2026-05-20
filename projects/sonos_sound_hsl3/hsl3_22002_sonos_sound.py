@@ -431,29 +431,44 @@ class LogicModule:
         # Each input dispatches on any change of value. Bass / Treble
         # are signed integers clamped to -10..10; the others are
         # 0/1 booleans; sleep timer is minutes (0 cancels).
+        #
+        # Each value-driven input checks the last-known player state
+        # before dispatching SOAP. This prevents KNX-feedback loops
+        # when the integrator wires the matching status output to the
+        # same group address as the input — a typical Gira QuadClient
+        # slider/switch widget pattern.
         if inputs["SetBass"].changed:
             val = clamp(inputs["SetBass"].value, -10, 10)
-            self._run_threaded(lambda v=val: self._action_set_bass(v))
+            if val != self._last_bass:
+                self._run_threaded(lambda v=val: self._action_set_bass(v))
         if inputs["SetTreble"].changed:
             val = clamp(inputs["SetTreble"].value, -10, 10)
-            self._run_threaded(lambda v=val: self._action_set_treble(v))
+            if val != self._last_treble:
+                self._run_threaded(lambda v=val: self._action_set_treble(v))
         if inputs["SetLoudness"].changed:
             on = 1 if inputs["SetLoudness"].value else 0
-            self._run_threaded(lambda v=on: self._action_set_loudness(v))
+            if on != self._last_loudness:
+                self._run_threaded(lambda v=on: self._action_set_loudness(v))
         if inputs["SetNightMode"].changed:
             on = 1 if inputs["SetNightMode"].value else 0
-            self._run_threaded(
-                lambda v=on: self._action_set_eq("NightMode", v, "NIGHTMODE_UNSUPPORTED")
-            )
+            if on != self._last_night:
+                self._run_threaded(
+                    lambda v=on: self._action_set_eq("NightMode", v, "NIGHTMODE_UNSUPPORTED")
+                )
         if inputs["SetDialogMode"].changed:
             on = 1 if inputs["SetDialogMode"].value else 0
-            self._run_threaded(
-                lambda v=on: self._action_set_eq("DialogLevel", v, "DIALOGMODE_UNSUPPORTED")
-            )
+            if on != self._last_dialog:
+                self._run_threaded(
+                    lambda v=on: self._action_set_eq("DialogLevel", v, "DIALOGMODE_UNSUPPORTED")
+                )
         if inputs["SetCrossfade"].changed:
             on = 1 if inputs["SetCrossfade"].value else 0
-            self._run_threaded(lambda v=on: self._action_set_crossfade(v))
+            if on != self._last_crossfade:
+                self._run_threaded(lambda v=on: self._action_set_crossfade(v))
         if inputs["SetSleepTimer"].changed:
+            # Sleep timer doesn't have a directly-matching status
+            # output (SleepTimerRemaining is seconds, input is
+            # minutes), so we always dispatch — no loop risk.
             mins = int(inputs["SetSleepTimer"].value or 0)
             self._run_threaded(lambda m=mins: self._action_set_sleep_timer(m))
         # TV input — rising edge only. Engaging the soundbar's
@@ -463,29 +478,36 @@ class LogicModule:
             self._run_threaded(self._action_switch_tv_mode)
         if inputs["SetLED"].changed:
             on = 1 if inputs["SetLED"].value else 0
-            self._run_threaded(lambda v=on: self._action_set_led(v))
+            if on != self._last_led:
+                self._run_threaded(lambda v=on: self._action_set_led(v))
         if inputs["SetGroupVolume"].changed:
             v = clamp(inputs["SetGroupVolume"].value, 0, 100)
-            self._run_threaded(lambda x=v: self._action_set_group_volume(x))
+            if v != self._last_group_volume:
+                self._run_threaded(lambda x=v: self._action_set_group_volume(x))
         if inputs["SetSurroundEnable"].changed:
             on = 1 if inputs["SetSurroundEnable"].value else 0
-            self._run_threaded(lambda v=on:
-                self._action_set_eq("SurroundEnable", v, "SURROUND_UNSUPPORTED"))
+            if on != self._last_surround_enable:
+                self._run_threaded(lambda v=on:
+                    self._action_set_eq("SurroundEnable", v, "SURROUND_UNSUPPORTED"))
         if inputs["SetSurroundLevel"].changed:
             v = clamp(inputs["SetSurroundLevel"].value, -15, 15)
-            self._run_threaded(lambda x=v:
-                self._action_set_eq("SurroundLevel", x, "SURROUND_UNSUPPORTED"))
+            if v != self._last_surround_level:
+                self._run_threaded(lambda x=v:
+                    self._action_set_eq("SurroundLevel", x, "SURROUND_UNSUPPORTED"))
         if inputs["SetSubEnable"].changed:
             on = 1 if inputs["SetSubEnable"].value else 0
-            self._run_threaded(lambda v=on:
-                self._action_set_eq("SubEnable", v, "SUB_UNSUPPORTED"))
+            if on != self._last_sub_enable:
+                self._run_threaded(lambda v=on:
+                    self._action_set_eq("SubEnable", v, "SUB_UNSUPPORTED"))
         if inputs["SetSubGain"].changed:
             v = clamp(inputs["SetSubGain"].value, -15, 15)
-            self._run_threaded(lambda x=v:
-                self._action_set_eq("SubGain", x, "SUB_UNSUPPORTED"))
+            if v != self._last_sub_gain:
+                self._run_threaded(lambda x=v:
+                    self._action_set_eq("SubGain", x, "SUB_UNSUPPORTED"))
         if inputs["SetTrueplay"].changed:
             on = 1 if inputs["SetTrueplay"].value else 0
-            self._run_threaded(lambda v=on: self._action_set_trueplay(v))
+            if on != self._last_trueplay:
+                self._run_threaded(lambda v=on: self._action_set_trueplay(v))
 
     def on_timer(self, timer):
         if timer["Tick"].changed:

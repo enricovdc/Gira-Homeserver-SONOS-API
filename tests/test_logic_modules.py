@@ -377,6 +377,76 @@ class TestSonosPlayerLogicModule(unittest.TestCase):
         self.assertEqual(fw.outputs["Volume"], 33.0)
         self.assertIsInstance(fw.outputs["Volume"], float)
 
+    def test_volume_setvolume_loopback_terminates(self):
+        """Wiring Volume output back to SetVolume input (common Gira
+        QuadClient pattern: single GA for both) used to loop forever.
+        The output had no SBC and the input dispatched SOAP regardless
+        of whether the requested level matched the player's current
+        state. Now BOTH guards are in place — verify with a synthetic
+        loop simulation."""
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._host = "10.0.0.1"
+        soap_calls = []
+        lm._soap = lambda s, a, e: (soap_calls.append((a, e)) or (True, "<CurrentVolume>50</CurrentVolume>", ""))
+        # Run actions inline so the output write happens before the
+        # next loop iteration.
+        lm._run_control_threaded = lambda fn: fn()
+        # Step 1: integrator sets a new volume via KNX (50, different
+        # from init -1). SetVolume input fires; SOAP dispatches.
+        ins = make_player_inputs(host="10.0.0.1")
+        ins["SetVolume"] = StubSlot(50, changed=True)
+        lm.on_calc(ins)
+        self.assertEqual(len(soap_calls), 1)
+        self.assertEqual(soap_calls[0][0], "SetVolume")
+        self.assertEqual(fw.outputs["Volume"], 50.0)
+        # Step 2: KNX echoes the output value back into the input GA.
+        # Input-side suppression should now see level == _last_volume
+        # and skip the redundant SOAP. The loop terminates here.
+        soap_calls.clear()
+        ins = make_player_inputs(host="10.0.0.1")
+        ins["SetVolume"] = StubSlot(50, changed=True)
+        lm.on_calc(ins)
+        self.assertEqual(soap_calls, [],
+            "expected no SOAP — the input value matches our last "
+            "known state; this is a KNX feedback echo, not a real change")
+
+    def test_setmute_loopback_terminates(self):
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._host = "10.0.0.1"
+        soap_calls = []
+        lm._soap = lambda s, a, e: (soap_calls.append(a) or (True, "<CurrentMute>1</CurrentMute>", ""))
+        lm._run_control_threaded = lambda fn: fn()
+        ins = make_player_inputs(host="10.0.0.1")
+        ins["SetMute"] = StubSlot(1, changed=True)
+        lm.on_calc(ins)
+        self.assertIn("SetMute", soap_calls)
+        # Echo: same value back.
+        soap_calls.clear()
+        ins = make_player_inputs(host="10.0.0.1")
+        ins["SetMute"] = StubSlot(1, changed=True)
+        lm.on_calc(ins)
+        self.assertEqual(soap_calls, [])
+
+    def test_mark_volume_is_send_by_change(self):
+        """Volume output writes only when the level changed from the
+        last published value. Same NOTIFY arriving twice should only
+        produce one KNX broadcast."""
+        fw = StubFramework()
+        lm = self.mod.LogicModule(fw)
+        lm._mark_volume(50)
+        self.assertEqual(fw.outputs["Volume"], 50.0)
+        # Same level — output should NOT be re-emitted.
+        fw.outputs.clear()
+        lm._mark_volume(50)
+        self.assertNotIn("Volume", fw.outputs)
+        # Different level — emits again.
+        lm._mark_volume(40)
+        self.assertEqual(fw.outputs["Volume"], 40.0)
+
     def test_state_booleans_exclusive(self):
         """IsPlaying / IsPaused / IsStopped / IsTransitioning are
         mutually exclusive — at most one is 1 at any time."""
@@ -400,11 +470,14 @@ class TestSonosPlayerLogicModule(unittest.TestCase):
         self.assertEqual(fw.outputs["IsTransitioning"], 1)
 
     def test_mark_play_mode_writes_shuffle_repeat(self):
+        """SBC-aware: each flag only emits when it changes from the
+        last published value. Init is (False, False) so the False
+        side of the first call shouldn't reach the output map at all."""
         fw = StubFramework()
         lm = self.mod.LogicModule(fw)
         lm._mark_play_mode(True, False)
         self.assertEqual(fw.outputs["ShuffleState"], 1)
-        self.assertEqual(fw.outputs["RepeatState"], 0)
+        self.assertNotIn("RepeatState", fw.outputs)  # unchanged from init
         lm._mark_play_mode(False, True)
         self.assertEqual(fw.outputs["ShuffleState"], 0)
         self.assertEqual(fw.outputs["RepeatState"], 1)

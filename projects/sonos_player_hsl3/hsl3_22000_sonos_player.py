@@ -916,9 +916,19 @@ class LogicModule:
         if inputs["Prev"].changed and inputs["Prev"].value != 0:
             self._run_control_threaded(self._action_previous)
 
+        # SetVolume / SetMute / SetShuffle / SetRepeat are commonly
+        # wired to the same KNX group address as their matching status
+        # output (Volume / Mute / ShuffleState / RepeatState) — Gira
+        # QuadClient slider widgets do this by default. Suppress the
+        # SOAP dispatch when the requested value already matches the
+        # last known player state; that's the echo from our own
+        # output write rather than a real user request. Combined with
+        # the SBC guard on the output side this fully breaks the
+        # feedback loop.
         if inputs["SetVolume"].changed:
-            level = int(inputs["SetVolume"].value or 0)
-            self._run_control_threaded(lambda: self._action_set_volume(level))
+            level = max(0, min(100, int(inputs["SetVolume"].value or 0)))
+            if level != self._last_volume:
+                self._run_control_threaded(lambda v=level: self._action_set_volume(v))
 
         if inputs["VolUp"].changed and inputs["VolUp"].value != 0:
             self._run_control_threaded(lambda: self._action_adjust_volume(+self._vol_step))
@@ -935,7 +945,9 @@ class LogicModule:
 
         if inputs["SetMute"].changed:
             mute = inputs["SetMute"].value != 0
-            self._run_control_threaded(lambda: self._action_set_mute(mute))
+            # Loop suppression — see SetVolume comment above.
+            if self._last_mute is None or bool(self._last_mute) != mute:
+                self._run_control_threaded(lambda m=mute: self._action_set_mute(m))
         if inputs["MuteToggle"].changed and inputs["MuteToggle"].value != 0:
             self._run_control_threaded(self._action_toggle_mute)
 
@@ -950,9 +962,12 @@ class LogicModule:
                            if inputs["SetShuffle"].changed else self._last_shuffle)
             new_repeat = (bool(inputs["SetRepeat"].value)
                           if inputs["SetRepeat"].changed else self._last_repeat)
-            self._run_control_threaded(
-                lambda s=new_shuffle, r=new_repeat: self._action_set_play_mode(s, r)
-            )
+            # Loop suppression — same idea as SetVolume above.
+            if (new_shuffle != bool(self._last_shuffle)
+                    or new_repeat != bool(self._last_repeat)):
+                self._run_control_threaded(
+                    lambda s=new_shuffle, r=new_repeat: self._action_set_play_mode(s, r)
+                )
 
         # Start a radio station from the admin's central library OR from
         # the per-player StationNUri inputs. Two routes:
@@ -1908,23 +1923,42 @@ class LogicModule:
         self._publish_sub_state()
 
     def _mark_state(self, state):
-        self._last_state = _normalize_state(state)
+        new = _normalize_state(state)
+        if new == self._last_state:
+            return
+        self._last_state = new
         self.fw.set_output("State", to_iso_bytes(self._last_state))
         self._publish_state_flags()
 
     def _mark_play_mode(self, shuffle, repeat):
-        self._last_shuffle = bool(shuffle)
-        self._last_repeat = bool(repeat)
-        self.fw.set_output("ShuffleState", 1 if self._last_shuffle else 0)
-        self.fw.set_output("RepeatState", 1 if self._last_repeat else 0)
+        s = bool(shuffle)
+        r = bool(repeat)
+        if s != bool(self._last_shuffle):
+            self._last_shuffle = s
+            self.fw.set_output("ShuffleState", 1 if s else 0)
+        if r != bool(self._last_repeat):
+            self._last_repeat = r
+            self.fw.set_output("RepeatState", 1 if r else 0)
 
     def _mark_volume(self, level):
+        # Send-by-change. Without this guard, every NOTIFY / poll
+        # re-broadcasts the same value to the KNX bus, which then
+        # echoes back to a SetVolume input wired to the same GA and
+        # we never stop dispatching SOAP. See on_calc's matching
+        # input-side suppression which catches the same echo on the
+        # other end.
+        level = int(level)
+        if level == self._last_volume:
+            return
         self._last_volume = level
         self.fw.set_output("Volume", float(level))
 
     def _mark_mute(self, mute):
-        self._last_mute = mute
-        self.fw.set_output("Mute", 1 if mute else 0)
+        m = bool(mute)
+        if self._last_mute is not None and bool(self._last_mute) == m:
+            return
+        self._last_mute = m
+        self.fw.set_output("Mute", 1 if m else 0)
 
     def _mark_active_station(self, idx, name=""):
         """Update the ActiveStation + ActiveStationName outputs after a

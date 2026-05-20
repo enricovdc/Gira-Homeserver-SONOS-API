@@ -288,6 +288,50 @@ in the Sonos Admin web UI:
   default. Useful for e.g. shortening the poll interval on a single
   speaker that needs faster feedback.
 
+## Single-GA loopback (Volume → SetVolume, Mute → SetMute, …)
+
+A common Gira QuadClient pattern is to bind a single KNX group
+address to both the **set** input and the **status** output of the
+same control — one address serves both directions of a slider /
+switch widget. Without protection this creates a feedback loop:
+the LBS broadcasts a status update, KNX echoes it back to the
+matching input, the LBS dispatches SOAP again, Sonos echoes
+another status… forever.
+
+Both LBS 22000 and LBS 22002 break this loop on both sides:
+
+- **Output (send-by-change)**: `Volume`, `Mute`, `State`,
+  `ShuffleState`, `RepeatState`, `Bass`, `Treble`, `Loudness`,
+  `Crossfade`, `LED`, `GroupVolume`, `NightMode`, `DialogMode`,
+  `SurroundEnable`, `SurroundLevel`, `SubEnable`, `SubGain`,
+  `Trueplay` — each only writes to `set_output` when the value
+  actually changed from the last published value.
+- **Input (echo suppression)**: `SetVolume`, `SetMute`, `SetShuffle`,
+  `SetRepeat` (LBS 22000) and every value-driven `Set*` input on
+  LBS 22002 (`SetBass`, `SetTreble`, `SetLoudness`, `SetNightMode`,
+  `SetDialogMode`, `SetCrossfade`, `SetLED`, `SetGroupVolume`,
+  `SetSurroundEnable`, `SetSurroundLevel`, `SetSubEnable`,
+  `SetSubGain`, `SetTrueplay`) skip the SOAP dispatch when the
+  requested value already matches the last known player state.
+
+The two guards belt-and-braces: either alone would terminate the
+loop, but together they also avoid wasting one redundant SOAP per
+cycle. You can wire the same GA to both directions and the system
+will behave correctly.
+
+Trade-offs to be aware of:
+
+- The `SetMute` / `MuteToggle` distinction still applies — see the
+  Volume / Mute table above.
+- `MuteToggle`, `PlayPause`, `NextPrev`, `VolUpDown` and the rising-
+  edge buttons (`Play`, `Pause`, `Stop`, `Next`, `Prev`, `VolUp`,
+  `VolDown`, `Ungroup`, `Resubscribe`) are commands, not state
+  mirrors, so they're not loop-prone and have no suppression.
+- A status output that hasn't been written yet (first cycle after
+  download) won't broadcast its init value to KNX — the bus stays
+  unchanged until the player produces a real reading. That's the
+  intended SBC behaviour.
+
 ## Verifying the wiring
 
 After downloading the project to the HomeServer:
