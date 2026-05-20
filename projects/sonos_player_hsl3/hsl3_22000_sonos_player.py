@@ -277,6 +277,40 @@ def _friendly_title(raw):
     return s
 
 
+# Schemes Sonos sometimes leaks into <dc:title> or <r:streamContent>
+# before real ICY metadata arrives. None of these are user-friendly,
+# so the LBS treats them as "no title" and falls back to the active
+# preset name instead.
+_URL_LIKE_TITLE_PREFIXES = (
+    "http://",
+    "https://",
+    "x-rincon-mp3radio:",
+    "x-sonosapi-stream:",
+    "x-sonosapi-radio:",
+    "x-sonosapi-hls:",
+    "x-sonos-spotify:",
+    "x-sonos-htastream:",
+    "x-rincon-stream:",
+    "x-rincon-cpcontainer:",
+    "x-rincon-playlist:",
+    "x-rincon-queue:",
+    "x-rincon:",
+    "file://",
+)
+
+
+def _is_url_like_title(s):
+    """True if the value looks like a URI scheme rather than a
+    human-readable title. Some radio streams report their stream
+    URL in dc:title / streamContent (especially right after a
+    connect, before ICY 'now playing' metadata arrives); the
+    visualisation should show the preset name in that case."""
+    if not s:
+        return False
+    lower = str(s).strip().lower()
+    return lower.startswith(_URL_LIKE_TITLE_PREFIXES)
+
+
 # Sonos PlayMode alphabet. We expose only shuffle (bool) + repeat-all
 # (bool) on the input side because that's the user-facing pair; on the
 # output side we surface ShuffleState / RepeatState the same way. The
@@ -1094,12 +1128,15 @@ class LogicModule:
         # keys are all present (possibly empty). Always overwrite
         # so the previous track's Artist doesn't leak when going
         # from a Spotify track (rich metadata) to a radio stream
-        # (no <dc:creator>/<upnp:album>). streamContent overrides
-        # title for radio playback when it's non-empty.
-        if "title" in parsed:
-            self._last_title = _friendly_title(parsed["title"])
-        if "streamContent" in parsed and parsed["streamContent"]:
-            self._last_title = _friendly_title(parsed["streamContent"])
+        # (no <dc:creator>/<upnp:album>). _resolve_title picks the
+        # best label between streamContent (radio "now playing"),
+        # dc:title, and the active preset name — rejecting any
+        # URL-shaped value Sonos may have leaked.
+        if "title" in parsed or "streamContent" in parsed:
+            self._last_title = self._resolve_title(
+                parsed.get("title", ""),
+                parsed.get("streamContent", ""),
+            )
         if "artist" in parsed:
             self._last_artist = parsed["artist"]
         if "album" in parsed:
@@ -1758,7 +1795,7 @@ class LogicModule:
             play_mode = self._get_play_mode_blocking()
             actions = self._get_transport_actions_blocking()
             pos_ok, pos_body, _err = self._soap("AVTransport", "GetPositionInfo", ENV_GET_POSITION)
-            title = artist = album = album_art = track_uri = ""
+            title = artist = album = album_art = track_uri = stream_content = ""
             if pos_ok:
                 track_uri = extract_response_field(pos_body, "TrackURI") or ""
                 meta_raw = extract_response_field(pos_body, "TrackMetaData") or ""
@@ -1776,18 +1813,21 @@ class LogicModule:
                       or re.search(r"<r:albumArtURI>([^<]*)</r:albumArtURI>", meta))
                 if aa:
                     album_art = unescape_xml(aa.group(1))
+                # Keep dc:title and streamContent separate — the LBS
+                # picks the best one (and rejects URL-leaks) in
+                # _resolve_title at the apply step.
                 sc = re.search(r"<r:streamContent>([^<]*)</r:streamContent>", meta)
                 if sc:
-                    title = unescape_xml(sc.group(1)) or title
+                    stream_content = unescape_xml(sc.group(1))
             self.fw.run_in_context(
                 self._apply_status_poll,
                 (True, state, vol, mute, title, artist, album, album_art,
-                 play_mode, track_uri, actions),
+                 play_mode, track_uri, actions, stream_content),
             )
         else:
             self.fw.run_in_context(
                 self._apply_status_poll,
-                (False, None, None, None, "", "", "", "", None, "", None),
+                (False, None, None, None, "", "", "", "", None, "", None, ""),
             )
 
         self._maintain_subscriptions()
@@ -1951,6 +1991,23 @@ class LogicModule:
             return rec["zoneName"]
         return self._last_group_master
 
+    def _resolve_title(self, dc_title, stream_content):
+        """Pick the best human-readable title from the metadata Sonos
+        reports. streamContent is the ICY 'now playing' label radio
+        stations send, so it wins when available; dc:title is the
+        track title for queue playback. Either can legitimately be
+        empty, AND either can legitimately contain a stream URL
+        before the real metadata arrives. URL-shaped values get
+        rejected and we fall back to the active preset name (without
+        the "Loading: " prefix). Final fallback is empty string."""
+        for candidate in (stream_content, dc_title):
+            if candidate and not _is_url_like_title(candidate):
+                return _friendly_title(candidate)
+        name = self._active_station_name or ""
+        if name.startswith("Loading: "):
+            name = name[len("Loading: "):]
+        return name
+
     def _publish_outputs(self):
         self.fw.set_output("Online", 1 if self._online else 0)
         # State stays a direct write — it's a short enumerable string
@@ -2010,7 +2067,7 @@ class LogicModule:
 
     def _apply_status_poll(self, online, state, volume, mute, title, artist,
                            album="", album_art="", play_mode=None, track_uri="",
-                           actions=None):
+                           actions=None, stream_content=""):
         if self.debug is not None:
             self.debug.inc("Status polls")
             self.debug.timestamp("Last poll")
@@ -2029,7 +2086,7 @@ class LogicModule:
         # passes empty strings) keeps the last known values so a
         # transient network glitch doesn't blank the display.
         if online:
-            self._last_title = _friendly_title(title)
+            self._last_title = self._resolve_title(title, stream_content)
             self._last_artist = artist
             self._last_album = album
             self._last_album_art = self._absolute_album_art(album_art)

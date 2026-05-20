@@ -2,7 +2,7 @@
 
 Run through this list against real Sonos hardware when commissioning
 the HSL3 modules, after a Sonos firmware update, or after network
-changes. The 135 unit tests under `tests/test_logic_modules.py` cover
+changes. The 141 unit tests under `tests/test_logic_modules.py` cover
 the pure logic against a stubbed framework; this checklist is for
 hardware-in-the-loop validation.
 
@@ -105,6 +105,13 @@ Trigger the corresponding KNX address (or simulate the input in Experte):
       tags so the previous Spotify metadata must not leak.
 - [ ] The `Title` output for the radio stream becomes the
       `streamContent` value (the now-playing label from the stream).
+- [ ] At the moment of switching to a radio preset, the
+      `streamContent` may not have arrived yet — Sonos sometimes
+      leaks the raw stream URL into `dc:title` / `streamContent`
+      for a few seconds. The Title output should NOT show a URL;
+      it should fall back to the active preset name (e.g. "BBC
+      Radio 1"). Once ICY metadata arrives the Title updates to
+      the real now-playing label.
 
 ## Group presets
 

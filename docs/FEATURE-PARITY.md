@@ -54,7 +54,7 @@ stores.
 | Repeat-all allowed | `RepeatAllowed` (A14) | Same heuristic as `ShuffleAllowed` |
 | Current volume | `Volume` (A15) | 0–100 |
 | Current mute | `Mute` (A16) | 0/1 |
-| Current track title | `Title` (A17) | Falls back to `streamContent` for radio; `ZPSTR_` leaks normalised |
+| Current track title | `Title` (A17) | `streamContent` (the radio "now playing" label) wins; falls back to `dc:title`. URL-shaped values that Sonos sometimes leaks before ICY metadata arrives are rejected — the Title then shows the active preset name (e.g. "BBC Radio 1") rather than the raw stream URL. `ZPSTR_` leaks normalised. |
 | Current artist | `Artist` (A18) | |
 | Current album | `Album` (A19) | Empty for radio streams |
 | Album-art URL | `AlbumArtURI` (A20) | Relative `/getaa?...` paths converted to absolute `http://<player-ip>:1400/getaa?...` so a Gira visualisation tile can use them directly |

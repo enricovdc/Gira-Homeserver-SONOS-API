@@ -1961,6 +1961,105 @@ class TestPlayerStationFromAdmin(unittest.TestCase):
         self.assertEqual(n(""), "")
         self.assertEqual(n(None), "")
 
+    def test_is_url_like_title(self):
+        """Detection of URI-shaped strings Sonos sometimes leaks
+        into dc:title or streamContent. Real titles must not match."""
+        c = self.player._is_url_like_title
+        # URL-shaped — should be flagged
+        self.assertTrue(c("http://stream.example.com/r.mp3"))
+        self.assertTrue(c("https://icecast.example.com/live"))
+        self.assertTrue(c("x-rincon-mp3radio://stream"))
+        self.assertTrue(c("x-sonosapi-stream:s24939?sid=254"))
+        self.assertTrue(c("x-sonos-spotify:spotify:track:abc"))
+        self.assertTrue(c("x-rincon:RINCON_AABBCC"))
+        self.assertTrue(c("file:///jffs/settings/savedqueues.rsq"))
+        # Real titles — must not be flagged
+        self.assertFalse(c("Bohemian Rhapsody"))
+        self.assertFalse(c("BBC Radio 1"))
+        self.assertFalse(c("Live at Madison Square Garden"))
+        self.assertFalse(c(""))
+        self.assertFalse(c(None))
+
+    def test_resolve_title_prefers_stream_content(self):
+        """streamContent wins when present and human-readable —
+        that's the ICY 'now playing' label radio sends."""
+        fw = StubFramework()
+        lm = self.player.LogicModule(fw)
+        lm._active_station_name = "BBC Radio 1"
+        # streamContent says "Beatles - Yesterday", dc:title empty
+        self.assertEqual(lm._resolve_title("", "Beatles - Yesterday"),
+                         "Beatles - Yesterday")
+        # streamContent says "Beatles - Yesterday", dc:title also set
+        # — streamContent still wins.
+        self.assertEqual(lm._resolve_title("Some Title", "Beatles - Yesterday"),
+                         "Beatles - Yesterday")
+
+    def test_resolve_title_falls_back_to_preset_when_url(self):
+        """When Sonos leaks the stream URL into dc:title or
+        streamContent (typical right after connect), the LBS must
+        fall back to the active preset name — the visualisation
+        should show 'BBC Radio 1' not 'http://stream.bbc.co.uk/…'."""
+        fw = StubFramework()
+        lm = self.player.LogicModule(fw)
+        lm._active_station_name = "BBC Radio 1"
+        # Both fields URL-shaped → preset name
+        self.assertEqual(
+            lm._resolve_title("x-rincon-mp3radio://stream",
+                              "http://stream.bbc.co.uk/r1.mp3"),
+            "BBC Radio 1",
+        )
+        # streamContent URL, dc:title real → dc:title wins
+        self.assertEqual(
+            lm._resolve_title("BBC Radio 1 Live",
+                              "x-rincon-mp3radio://stream"),
+            "BBC Radio 1 Live",
+        )
+        # Both empty → preset name
+        self.assertEqual(lm._resolve_title("", ""), "BBC Radio 1")
+
+    def test_resolve_title_strips_loading_prefix_from_preset(self):
+        """The 'Loading: ' marquee-style prefix that
+        _mark_active_station_loading writes must NOT appear in the
+        title fallback — the user wants the bare preset name."""
+        fw = StubFramework()
+        lm = self.player.LogicModule(fw)
+        lm._active_station_name = "Loading: BBC Radio 1"
+        self.assertEqual(lm._resolve_title("", ""), "BBC Radio 1")
+
+    def test_resolve_title_empty_when_no_metadata_no_preset(self):
+        """No real title anywhere and no preset → empty string,
+        rather than letting a URL through."""
+        fw = StubFramework()
+        lm = self.player.LogicModule(fw)
+        lm._active_station_name = ""
+        self.assertEqual(
+            lm._resolve_title("http://leaked", "x-sonosapi-stream:s1"),
+            "",
+        )
+
+    def test_apply_notify_uses_preset_name_when_title_is_url(self):
+        """End-to-end check for the NOTIFY path: a radio stream's
+        first notify often carries the stream URL in streamContent
+        before ICY metadata arrives. Title output must show the
+        preset name, not the URL."""
+        fw = StubFramework()
+        lm = self.player.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._host = "10.0.0.5"
+        # User just triggered the BBC Radio 1 preset.
+        lm._active_station_name = "BBC Radio 1"
+        # First notify after connect: streamContent contains the URL.
+        lm._apply_notify_parsed({
+            "state":         "PLAYING",
+            "title":         "",
+            "artist":        "",
+            "album":         "",
+            "streamContent": "x-rincon-mp3radio://stream.bbc.co.uk/r1.mp3",
+            "trackUri":      "x-sonosapi-stream:s12345",
+        })
+        # Title is the preset name, not the URL.
+        self.assertEqual(fw.outputs["Title"], b"BBC Radio 1")
+
     def test_friendly_title_passes_real_titles_through_unchanged(self):
         """Real track titles preserve their original casing — we don't
         want to title-case "Hey Jude" into "Hey jude" or any such
