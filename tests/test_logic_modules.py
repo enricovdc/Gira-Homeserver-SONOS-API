@@ -1717,6 +1717,185 @@ class TestPlayerStationFromAdmin(unittest.TestCase):
         lm._active_station = 0
         lm._action_step_preset(-1); self.assertEqual(calls[-1], 3)
 
+    def test_per_player_preset_lookup_isolated_from_global(self):
+        """With a player_spec, slots 1..10 are per-player; global presets
+        start at index 11. Same numeric index points at a different
+        preset on each player."""
+        adm = self.admin
+        with adm._registry_lock:
+            adm._stations.clear()
+            adm._players.clear()
+            adm._stations["g1"] = {"id": "g1", "name": "Globalo",
+                                   "uri": "http://glob/u1", "metadata": ""}
+            # Two players, each with its own slot 1.
+            adm._players["pA"] = {"id": "pA", "name": "kitchen", "uuid": "RINCON_AA",
+                                  "ip": "10.0.0.10", "mac": "aa:aa:aa:aa:aa:aa",
+                                  "source": "manual",
+                                  "presets": [{"slot": 1, "name": "Kitchen Mix",
+                                               "uri": "http://A/u1", "metadata": "",
+                                               "type": "playlist"}]}
+            adm._players["pB"] = {"id": "pB", "name": "office", "uuid": "RINCON_BB",
+                                  "ip": "10.0.0.11", "mac": "bb:bb:bb:bb:bb:bb",
+                                  "source": "manual",
+                                  "presets": [{"slot": 1, "name": "Office Focus",
+                                               "uri": "http://B/u1", "metadata": "",
+                                               "type": "playlist"}]}
+        # Index 1 with player_spec="kitchen" → Kitchen Mix.
+        rec = adm.get_station(1, "kitchen")
+        self.assertEqual(rec["name"], "Kitchen Mix")
+        self.assertEqual(rec["scope"], "player")
+        self.assertEqual(rec["index"], 1)
+        # Same index 1 on the other player → different preset.
+        rec = adm.get_station(1, "office")
+        self.assertEqual(rec["name"], "Office Focus")
+        # Index 11 (10 + 1) lands on the first global preset.
+        rec = adm.get_station(11, "kitchen")
+        self.assertEqual(rec["name"], "Globalo")
+        self.assertEqual(rec["scope"], "global")
+        self.assertEqual(rec["index"], 11)
+        # Index 2 (an unconfigured per-player slot) returns None — the
+        # player has no preset there, so it must NOT fall through to a
+        # global match.
+        self.assertIsNone(adm.get_station(2, "kitchen"))
+        # Without player_spec, legacy semantics: index 1 = first global.
+        rec = adm.get_station(1)
+        self.assertEqual(rec["name"], "Globalo")
+        self.assertEqual(rec["index"], 1)
+
+    def test_per_player_preset_name_lookup_prefers_player(self):
+        """A name match in the player's own list wins over a global
+        of the same name, so an integrator can override a global by
+        the same name on one specific player."""
+        adm = self.admin
+        with adm._registry_lock:
+            adm._stations.clear()
+            adm._players.clear()
+            adm._stations["g1"] = {"id": "g1", "name": "Favourite",
+                                   "uri": "http://glob/u", "metadata": ""}
+            adm._players["pA"] = {"id": "pA", "name": "kitchen", "uuid": "RINCON_AA",
+                                  "ip": "10.0.0.10", "source": "manual",
+                                  "presets": [{"slot": 3, "name": "Favourite",
+                                               "uri": "http://A/v", "metadata": "",
+                                               "type": "radio"}]}
+        rec = adm.get_station("Favourite", "kitchen")
+        self.assertEqual(rec["uri"], "http://A/v")
+        self.assertEqual(rec["scope"], "player")
+        self.assertEqual(rec["index"], 3)
+        # Player without the per-player preset falls back to global.
+        rec = adm.get_station("Favourite", "unknown-host")
+        self.assertEqual(rec["uri"], "http://glob/u")
+        self.assertEqual(rec["scope"], "global")
+
+    def test_get_station_indices_skips_empty_player_slots(self):
+        """PresetNextPrev iterates over CONFIGURED slots only — empty
+        per-player slots in the middle of 1..10 are skipped."""
+        adm = self.admin
+        with adm._registry_lock:
+            adm._stations.clear()
+            adm._players.clear()
+            adm._stations["g1"] = {"id": "g1", "name": "Alpha",
+                                   "uri": "u1", "metadata": ""}
+            adm._stations["g2"] = {"id": "g2", "name": "Bravo",
+                                   "uri": "u2", "metadata": ""}
+            adm._players["pA"] = {"id": "pA", "name": "kitchen", "uuid": "RINCON_AA",
+                                  "ip": "10.0.0.10", "source": "manual",
+                                  "presets": [
+                                      {"slot": 1, "name": "S1", "uri": "u",
+                                       "metadata": "", "type": ""},
+                                      {"slot": 4, "name": "S4", "uri": "u",
+                                       "metadata": "", "type": ""},
+                                  ]}
+        idxs = adm.get_station_indices("kitchen")
+        # Configured per-player slots, then globals 11 + 12.
+        self.assertEqual(idxs, [1, 4, 11, 12])
+
+    def test_action_step_preset_cycles_combined_list(self):
+        """With both per-player and global presets configured, the
+        Next/Prev cycle hits every configured per-player slot first
+        and then every global, skipping empty player slots."""
+        adm = self.admin
+        for mod_name, mod in list(sys.modules.items()):
+            if mod is None:
+                continue
+            if "sonos_admin" in mod_name and hasattr(mod, "_stations"):
+                with mod._registry_lock:
+                    mod._stations.clear()
+                    mod._players.clear()
+                    mod._stations["g1"] = {"id": "g1", "name": "Alpha",
+                                           "uri": "u1", "metadata": ""}
+                    mod._stations["g2"] = {"id": "g2", "name": "Bravo",
+                                           "uri": "u2", "metadata": ""}
+                    mod._players["pA"] = {
+                        "id": "pA", "name": "kitchen", "uuid": "RINCON_AA",
+                        "ip": "10.0.0.10", "source": "manual",
+                        "presets": [
+                            {"slot": 1, "name": "S1", "uri": "u",
+                             "metadata": "", "type": ""},
+                            {"slot": 4, "name": "S4", "uri": "u",
+                             "metadata": "", "type": ""},
+                        ],
+                    }
+        fw = StubFramework()
+        lm = self.player.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._host_spec = "kitchen"
+        calls = []
+        lm._action_start_radio = lambda idx, version=None: calls.append(idx)
+        # Configured indices: [1, 4, 11, 12].
+        lm._active_station = 0
+        lm._action_step_preset(+1); self.assertEqual(calls[-1], 1)
+        lm._active_station = 1
+        lm._action_step_preset(+1); self.assertEqual(calls[-1], 4)
+        lm._active_station = 4
+        lm._action_step_preset(+1); self.assertEqual(calls[-1], 11)
+        lm._active_station = 11
+        lm._action_step_preset(+1); self.assertEqual(calls[-1], 12)
+        # Wrap forward: 12 → 1.
+        lm._active_station = 12
+        lm._action_step_preset(+1); self.assertEqual(calls[-1], 1)
+        # Wrap backward: 1 → 12.
+        lm._active_station = 1
+        lm._action_step_preset(-1); self.assertEqual(calls[-1], 12)
+        # Step over the empty slot 2/3: 4 → 1 (previous).
+        lm._active_station = 4
+        lm._action_step_preset(-1); self.assertEqual(calls[-1], 1)
+
+    def test_api_set_and_remove_player_preset(self):
+        """REST CRUD for per-player presets — verifies the store-round-
+        tripped record matches the body, and DELETE clears the slot."""
+        adm = self.admin
+        with adm._registry_lock:
+            adm._players.clear()
+            adm._players["pA"] = {"id": "pA", "name": "kitchen",
+                                  "uuid": "RINCON_AA", "ip": "10.0.0.10",
+                                  "source": "manual"}
+        fw = StubFramework()
+        lm = adm.LogicModule(fw)
+        lm.fw = fw
+        # Upsert slot 3.
+        resp = lm.api_set_player_preset("pA", 3, {
+            "name": "Radio One", "uri": "http://r1", "type": "radio",
+            "metadata": "<DIDL/>",
+        })
+        self.assertTrue(resp["ok"])
+        self.assertEqual(resp["slot"], 3)
+        with adm._registry_lock:
+            stored = adm._players["pA"].get("presets") or []
+        self.assertEqual(len(stored), 1)
+        self.assertEqual(stored[0]["slot"], 3)
+        self.assertEqual(stored[0]["uri"], "http://r1")
+        # Out-of-range slot raises.
+        with self.assertRaises(ValueError):
+            lm.api_set_player_preset("pA", 11, {"name": "x", "uri": "x"})
+        with self.assertRaises(ValueError):
+            lm.api_set_player_preset("pA", 0, {"name": "x", "uri": "x"})
+        # Delete.
+        resp = lm.api_remove_player_preset("pA", 3)
+        self.assertTrue(resp["ok"])
+        with adm._registry_lock:
+            stored = adm._players["pA"].get("presets") or []
+        self.assertEqual(stored, [])
+
     def test_action_play_sound_uses_native_audioclip_when_available(self):
         """The primary path on modern S2 firmware is the native
         AudioClip service — single SOAP call, Sonos handles ducking +

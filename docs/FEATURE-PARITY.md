@@ -25,9 +25,9 @@ stores.
 | Mute toggle (button) | `MuteToggle` (E14) | **Rising-edge only** — each write of 1 reads the current mute state and flips it. For a KNX push button that always sends value 1 on press. Use `SetMute` instead for a regular switch that sends both 0 and 1. |
 | Set shuffle on / off | `SetShuffle` (E15) | Composed with `SetRepeat` into Sonos `PlayMode`; changing one input preserves the other |
 | Set repeat-all on / off | `SetRepeat` (E16) | REPEAT_ONE surfaces on `RepeatState` but is not exposed as a separate input |
-| Start preset by index | `StartRadio` (E17) | Alphabetical 1..N into the Admin preset library |
-| Start preset by name | `StartRadioName` (E18) | Case-insensitive lookup in the same library |
-| Next / Previous preset toggle | `PresetNextPrev` (E19) | Steps through the Admin preset library alphabetically. Wraps at both ends. NO_PRESETS on LastError if the library is empty. |
+| Start preset by index | `StartRadio` (E17) | Slots 1..10 = per-player presets configured on this player's card in the Admin UI; 11..(10+N) = global library entries (alphabetical). Same global index on every player. |
+| Start preset by name | `StartRadioName` (E18) | Case-insensitive. Per-player presets win over a global of the same name. |
+| Next / Previous preset toggle | `PresetNextPrev` (E19) | Cycles through the configured per-player slots (skipping empty ones) then every global preset. Wraps at both ends. NO_PRESETS on LastError when nothing is configured. |
 | Form group preset by index | `GroupPreset` (E20) | Alphabetical 1..N into the Admin group-preset library; master + members come from the Admin definition |
 | Form group preset by name | `GroupPresetName` (E21) | Case-insensitive |
 | Break out of current group | `Ungroup` (E22) | Rising edge → `BecomeCoordinatorOfStandaloneGroup` |
@@ -62,8 +62,8 @@ stores.
 | Repeat state | `RepeatState` (A22) | 1 when REPEAT_ALL or REPEAT_ONE |
 | Group master | `GroupInfo` (A23) | Empty when coordinator / standalone; master's Zone Name (resolved via Admin) or RINCON UUID when a slave |
 | Is coordinator | `IsCoordinator` (A24) | 1 when this player is the group coordinator or standalone, 0 when slave. Derived from `CurrentTrackURI` starting with `x-rincon:` |
-| Active preset index | `ActiveStation` (A25) | 0 = none. Alphabetical 1..N index of the last preset started, regardless of whether it was selected by index, name, or `PresetNextPrev` |
-| Active preset name | `ActiveStationName` (A26) | Preset's display name from the Admin library. Prefixed with `Loading: ` the moment a preset trigger fires — visible during the SOAP dispatch (matters for group-join and queue playback that take a few seconds). Prefix clears on success. |
+| Active preset index | `ActiveStation` (A25) | 0 = none. 1..10 = the per-player slot last started; 11+ = the global preset's offset index. Stable across name / index / `PresetNextPrev` triggers. |
+| Active preset name | `ActiveStationName` (A26) | Preset's display name (per-player or global, whichever matched). Prefixed with `Loading: ` the moment a preset trigger fires — visible during the SOAP dispatch (matters for group-join and queue playback that take a few seconds). Prefix clears on success. |
 | Last error code | `LastError` (A27) | UPnP code, `UNREACHABLE`, `HTTP_<n>`, `PRESET_NOT_FOUND`, `NO_PRESETS`, `GROUP_NOT_FOUND`, `GROUP_PARTIAL`, `SET_PLAY_MODE_FAILED`, `EXCEPTION: …` |
 | UPnP subscription health | `Subscribed` (A28) | 1 = both AVTransport + RenderingControl subscriptions alive |
 
@@ -84,18 +84,34 @@ on the player record wins; missing fields fall through to the
 project default; project default falls through to hard-coded
 fallbacks (60 s / 1800 s / 5 s / auto-detected LAN IP).
 
-## Presets (Admin library, no per-player slots)
+## Presets (global library + per-player slots)
+
+Two registries cooperate to drive `StartRadio` / `StartRadioName` /
+`PresetNextPrev`:
+
+* **Global presets** live in the Admin's `_stations` registry and are
+  shared by every Sonos Player block. They occupy indices
+  **11..(10 + globalCount)** so a given global index points at the
+  same preset on every player — wire `StartRadio = 14` once, every
+  speaker plays "the third global preset".
+* **Per-player presets** live on each player record (`_players[pid]
+  ["presets"]`) and occupy fixed slots **1..10**. Each player has
+  its own independent set; slot 1 on the kitchen speaker is
+  unrelated to slot 1 on the office speaker. Slots may be sparse
+  (slot 2 + slot 7 only, nothing else) — `PresetNextPrev` skips
+  empties.
 
 | Function | Location | Notes |
 | --- | --- | --- |
-| Maintain the preset library | LBS 22001 Admin web UI (Presets section) | One source of truth across every player. Captures URI + DIDL-Lite metadata + type tag (radio / playlist / source / track). |
-| Import a player's Favorites | Admin UI "Favorites" button on a player card | Browses FV:2 (Sonos Favorites), AI: (audio inputs — Line-In on Connect:Amp / Bluetooth on Era 100 / TV on Beam …), and SQ: (saved Sonos playlists). |
-| Start preset by index | LBS 22000 input `StartRadio` | Alphabetical 1..N into the library |
-| Start preset by name | LBS 22000 input `StartRadioName` | Case-insensitive |
+| Maintain the global preset library | LBS 22001 Admin web UI ("Global presets" section) | One source of truth across every player. Captures URI + DIDL-Lite metadata + type tag (radio / playlist / source / track). |
+| Maintain per-player presets | LBS 22001 Admin web UI, "Per-player presets" pane on each player card | Up to 10 slots per player. Slots survive across HomeServer restarts via `PersistedPlayers`. |
+| Import a player's Favorites | Admin UI "Favorites" button on a player card | Browses FV:2 (Sonos Favorites), AI: (audio inputs — Line-In on Connect:Amp / Bluetooth on Era 100 / TV on Beam …), and SQ: (saved Sonos playlists). Adds the picked item to the **global** library. |
+| Start preset by index | LBS 22000 input `StartRadio` | 1..10 → this player's slot; 11+ → global at `(idx - 10)` alphabetically |
+| Start preset by name | LBS 22000 input `StartRadioName` | Case-insensitive. Per-player names win over a global of the same name. |
 | Direct-stream presets | `_action_start_radio` direct-play path | `x-rincon-mp3radio://` rewrite + metadata-rejection fallback ladder (UPnP error codes 714/716/402/501/800) |
 | Cloud-service presets (TuneIn / Spotify / Apple) | `_action_start_radio` cloud path | Preserves the music-service binding from the captured `<r:resMD>` metadata — without it Sonos can't resolve the URI |
 | Container playback (playlists, saved queues, albums) | `_play_via_queue` | `RemoveAllTracksFromQueue` → `AddURIToQueue` → `SetAVTransportURI(x-rincon-queue:<uuid>#0)` → `Play`. Routed by `_is_container_uri` |
-| Cross-LBS station lookup | `get_station` / `get_station_uri` module-level helpers in the Admin | LBS 22000 calls via `sys.modules` lookup; returns the full record including metadata |
+| Cross-LBS station lookup | `get_station(idx_or_name, player_spec)` / `get_station_indices(player_spec)` / `get_station_count(player_spec)` module-level helpers in the Admin | LBS 22000 calls via `sys.modules` lookup, passing `self._host_spec`. Returns the full record incl. metadata and a `scope` field ("player" or "global"). |
 | Group-join preset | Preset record with `uri="x-rincon:RINCON_<master>"` and `type="join"` | Admin UI offers a dedicated "Add join preset" form with a master dropdown so the integrator never types the URI by hand. The Player's `_is_group_join_uri` detects the bare `x-rincon:` scheme and dispatches `SetAVTransportURI` without a subsequent `Play` — slaves auto-inherit the master's transport state. Triggered like any other preset via `StartRadio` / `StartRadioName` / `PresetNextPrev`. |
 
 ## Sounds (notification clips)
@@ -225,8 +241,11 @@ primitives.
 | Trigger SSDP scan | `POST /api/players/discover` | `api_discover_now` |
 | Browse a player's Favorites + AI: + SQ: | `GET /api/players/{id}/favorites` | `api_player_favorites` |
 | Browse a player's saved playlists | `GET /api/players/{id}/playlists` | `api_player_playlists` |
-| List preset library | `GET /api/stations` | `api_list_stations` |
-| Add / edit / remove a preset | `POST` / `PATCH` / `DELETE /api/stations[/{id}]` | `api_add_station` / `api_update_station` / `api_remove_station` |
+| List global preset library | `GET /api/stations` | `api_list_stations` |
+| Add / edit / remove a global preset | `POST` / `PATCH` / `DELETE /api/stations[/{id}]` | `api_add_station` / `api_update_station` / `api_remove_station` |
+| List a player's per-player presets | `GET /api/players/{id}/presets` | `api_list_player_presets` |
+| Upsert a per-player preset at a slot | `PUT /api/players/{id}/presets/{slot}` | `api_set_player_preset` (slot is 1..10) |
+| Clear a per-player preset slot | `DELETE /api/players/{id}/presets/{slot}` | `api_remove_player_preset` |
 | List group presets | `GET /api/groups` | `api_list_groups` |
 | Add / edit / remove a group preset | `POST` / `PATCH` / `DELETE /api/groups[/{id}]` | `api_add_group` / `api_update_group` / `api_remove_group` |
 | Get player defaults | `GET /api/player-defaults` | `api_get_player_defaults` |

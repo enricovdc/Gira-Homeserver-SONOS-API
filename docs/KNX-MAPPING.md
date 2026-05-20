@@ -41,7 +41,7 @@ KNX group address whose flipping drives the action.
 | --- | --- | --- | --- |
 | 5/0/10 | 1.001 | `PlayPause`      | 1 = Play, 0 = Pause |
 | 5/0/11 | 1.001 | `NextPrev`       | 1 = Next track, 0 = Previous track |
-| 5/0/12 | 1.001 | `PresetNextPrev` | 1 = Next preset, 0 = Previous preset (cycles Admin library, wraps) |
+| 5/0/12 | 1.001 | `PresetNextPrev` | 1 = Next preset, 0 = Previous preset. Cycles this player's configured slots (1..10) then every global preset (11+), wraps at both ends; empty slots are skipped. |
 
 ### Volume / Mute
 
@@ -64,8 +64,8 @@ KNX group address whose flipping drives the action.
 
 | GA | DPT | Input | Description |
 | --- | --- | --- | --- |
-| 5/0/40 | 5.010 | `StartRadio`     | Alphabetical index 1..N of a preset in the Admin library |
-| 5/0/41 | 16.001 | `StartRadioName` | Preset name (case-insensitive). Useful for a Gira visualisation dropdown. |
+| 5/0/40 | 5.010 | `StartRadio`     | 1..10 = per-player preset slot configured on this player's Admin card; 11..(10+N) = global preset (alphabetical). The same global index points at the same preset on every player. |
+| 5/0/41 | 16.001 | `StartRadioName` | Preset name (case-insensitive). Per-player names win over a global of the same name. |
 | 5/0/45 | 5.010 | `PlaySound`       | Alphabetical index of a notification clip in the Admin Sounds library. Triggers the Sonos native announcement (or snapshot/restore on S1). |
 
 ### Group presets
@@ -143,8 +143,8 @@ buttons in a visualisation that the player would reject.
 
 | GA | DPT | Output | Value |
 | --- | --- | --- | --- |
-| 5/0/150 | 5.010  | `ActiveStation`     | Alphabetical index of the last preset started (0 = none). Regardless of whether the preset was selected by index, name, or `PresetNextPrev`. |
-| 5/0/151 | 16.001 | `ActiveStationName` | Display name of the active preset |
+| 5/0/150 | 5.010  | `ActiveStation`     | Index of the last preset started (0 = none). 1..10 = a per-player slot; 11+ = a global preset's offset index. Stable across name / index / `PresetNextPrev` triggers. |
+| 5/0/151 | 16.001 | `ActiveStationName` | Display name of the active preset (per-player or global) |
 
 ### Group membership
 
@@ -239,9 +239,11 @@ Wall plates with discrete physical buttons:
 ```
 
 Each button triggers a small logic block that writes the corresponding
-index to `StartRadio`. The Admin's preset library is the single source
-of truth; preset numbering is alphabetical and shown in the `#` column
-of the Admin web UI.
+index to `StartRadio`. The Admin holds two registries: each player's
+**per-player presets** (slots 1..10, shown on the player card) and the
+**global preset library** (indices 11+, alphabetical). Choose buttons
+1..10 to drive that player's own slots, or 11+ to drive shared globals
+— both can coexist on the same Player block.
 
 ### Single value picks the preset
 

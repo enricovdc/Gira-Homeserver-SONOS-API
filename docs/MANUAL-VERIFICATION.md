@@ -2,7 +2,7 @@
 
 Run through this list against real Sonos hardware when commissioning
 the HSL3 modules, after a Sonos firmware update, or after network
-changes. The 143 unit tests under `tests/test_logic_modules.py` cover
+changes. The 148 unit tests under `tests/test_logic_modules.py` cover
 the pure logic against a stubbed framework; this checklist is for
 hardware-in-the-loop validation.
 
@@ -77,14 +77,16 @@ Trigger the corresponding KNX address (or simulate the input in Experte):
 - [ ] Toggle shuffle/repeat from the Sonos app on a phone — the
       respective `*State` outputs update within ~1 s (NOTIFY-driven).
 
-## Presets (Admin library)
+## Presets (global library + per-player slots)
 
-- [ ] Add at least 3 presets in the Admin web UI: a direct radio
-      stream (paste URL), a Sonos Favorite via the *Favorites* button
-      on a player card, and a saved playlist via *Playlists*.
-- [ ] Write `1` to `StartRadio` → first preset starts within ~3 s.
-      `State` → `Playing`, `Title` populates, `ActiveStation` reads 1,
-      `ActiveStationName` matches the preset's display name.
+- [ ] Add at least 3 **global** presets in the Admin web UI's "Global
+      presets" section: a direct radio stream (paste URL), a Sonos
+      Favorite via the *Favorites* button on a player card, and a
+      saved playlist via *Playlists*. These occupy indices 11+.
+- [ ] Write `11` to `StartRadio` → the alphabetically-first global
+      preset starts within ~3 s. `State` → `Playing`, `Title`
+      populates, `ActiveStation` reads 11, `ActiveStationName`
+      matches the preset's display name.
 - [ ] Write a non-existent index (e.g. `99`) → `LastError` reads
       `PRESET_NOT_FOUND: 99`. No crash, no playback change.
 - [ ] Test a playlist preset → the queue-and-play path runs
@@ -101,6 +103,36 @@ Trigger the corresponding KNX address (or simulate the input in Experte):
       intermediate one. `ActiveStationName` matches the final
       preset's name; no leftover `Loading:` prefix. Verifies the
       preset-dispatch generation / version-bail behaviour.
+
+## Per-player presets
+
+- [ ] On a player card in the Admin UI, open *Per-player presets
+      (slots 1–10)*. Configure slot 1 (a radio stream) and slot 4 (a
+      Spotify / Apple Music playlist). Leave 2, 3, 5..10 empty.
+- [ ] Write `1` to `StartRadio` → the slot-1 preset starts.
+      `ActiveStation` reads 1, `ActiveStationName` matches slot 1's
+      name. Verifies a per-player slot wins over the same index in
+      the global library (which now starts at 11).
+- [ ] Write `4` to `StartRadio` → slot 4 starts.
+- [ ] Write `2` to `StartRadio` (an empty slot) → `LastError =
+      PRESET_NOT_FOUND: 2`. The Player must NOT silently fall
+      through to a global preset for an empty per-player slot.
+- [ ] On a SECOND Player block (different `Host`), configure slot 1
+      with a different preset. Write `1` to `StartRadio` on each
+      block in turn — each plays its own slot-1 preset. Verifies
+      per-player isolation.
+- [ ] `PresetNextPrev`: with slot 1 + slot 4 + globals 11/12 present,
+      a forward cycle from index 0 should hit 1 → 4 → 11 → 12 → 1.
+      Empty slots 2/3/5..10 must be skipped.
+- [ ] Backward `PresetNextPrev` (write 0) from index 1 wraps to the
+      last configured index (e.g. 12). From index 4 it steps to 1
+      (skipping 3, 2).
+- [ ] Configure the same preset NAME on a per-player slot and on the
+      global library. `StartRadioName = "<name>"` must trigger the
+      per-player slot (verifies the name-resolution precedence).
+- [ ] Restart the HomeServer. The per-player slots are still
+      configured under each player card (persisted via
+      `PersistedPlayers`).
 
 ## Track-metadata refresh
 

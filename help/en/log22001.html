@@ -29,7 +29,7 @@
 <div class="topic">
   <h2 class="t-line"><a id="auto_index_anchor_1_"></a><span class="t-chapter">1.</span><span class="t-text">Description</span></h2>
   <div class="descr">
-    Singleton companion node that starts an HTTP server inside HSL3 and serves a web administration UI for the Sonos integration. The UI lets the end user manage discovered and manually-added Sonos players (identified by IP and/or MAC), maintain a global preset library (radio, favorites, playlists, line-in sources), define per-project Player Defaults for the PollInterval / SubTimeout / HttpTimeout / CallbackBase tunables, and configure Sonos Cloud Control API credentials with OAuth authorization without leaving the HomeServer.
+    Singleton companion node that starts an HTTP server inside HSL3 and serves a web administration UI for the Sonos integration. The UI lets the end user manage discovered and manually-added Sonos players (identified by IP and/or MAC), maintain a global preset library (radio, favorites, playlists, line-in sources, indices 11+) plus up to 10 per-player preset slots on each player card (indices 1..10, every player has its own independent set), define per-project Player Defaults for the PollInterval / SubTimeout / HttpTimeout / CallbackBase tunables, and configure Sonos Cloud Control API credentials with OAuth authorization without leaving the HomeServer.
   </div>
   <div class="descr">
     The node runs both periodic and KNX-triggerable SSDP discovery. The latest scan result is emitted as a newline-separated ip;uuid;model list on DiscoveredPlayers and a numeric count on LastDiscoveryCount, suitable for direct KNX wiring or HS visualisation widgets.

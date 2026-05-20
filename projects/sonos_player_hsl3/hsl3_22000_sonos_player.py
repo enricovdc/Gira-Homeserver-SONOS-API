@@ -491,10 +491,13 @@ def _admin_player_defaults():
     return {}
 
 
-def _lookup_station_via_admin(idx_or_name):
-    """If the Sonos Admin LBS is loaded, ask it for the full station
-    record (uri + metadata + name + index). Returns None when Admin
-    isn't present or doesn't know the station."""
+def _lookup_station_via_admin(idx_or_name, player_spec=None):
+    """If the Sonos Admin LBS is loaded, ask it for the full preset
+    record (uri + metadata + name + index + scope). Returns None when
+    Admin isn't present or doesn't know the preset. When
+    ``player_spec`` is supplied per-player presets (slots 1..10) win
+    over global library lookups; global presets shift to indices
+    11..(10 + globalCount)."""
     for mod_name, mod in list(sys.modules.items()):
         if mod is None:
             continue
@@ -502,7 +505,11 @@ def _lookup_station_via_admin(idx_or_name):
             fn = getattr(mod, "get_station", None)
             if callable(fn):
                 try:
-                    rec = fn(idx_or_name)
+                    try:
+                        rec = fn(idx_or_name, player_spec)
+                    except TypeError:
+                        # Older Admin without per-player presets.
+                        rec = fn(idx_or_name)
                     if rec and rec.get("uri"):
                         return rec
                 except Exception:
@@ -541,10 +548,12 @@ def _admin_sound_record(idx_or_name):
     return None
 
 
-def _admin_station_count():
-    """Total number of presets in the Admin library. Returns 0 when
-    Admin isn't loaded or has nothing yet — `PresetNextPrev` then
-    surfaces NO_PRESETS instead of dividing by zero."""
+def _admin_station_count(player_spec=None):
+    """Total number of presets visible to this player. With
+    ``player_spec``: PER_PLAYER_PRESET_SLOTS (10) plus the global
+    library count. Without: just the global count (legacy). Returns
+    0 when Admin isn't loaded so PresetNextPrev surfaces NO_PRESETS
+    instead of dividing by zero."""
     for mod_name, mod in list(sys.modules.items()):
         if mod is None:
             continue
@@ -552,12 +561,48 @@ def _admin_station_count():
             fn = getattr(mod, "get_station_count", None)
             if callable(fn):
                 try:
-                    n = fn()
+                    try:
+                        n = fn(player_spec)
+                    except TypeError:
+                        n = fn()
                     if isinstance(n, int):
                         return n
                 except Exception:
                     pass
     return 0
+
+
+def _admin_station_indices(player_spec=None):
+    """Sorted list of every CONFIGURED preset index for ``player_spec``.
+    Used by PresetNextPrev so the cycle skips empty per-player slots —
+    a player with slots 1 + 4 configured cycles 1 → 4 → 11 → 12 → ...
+    and back. Returns [] when Admin isn't loaded."""
+    for mod_name, mod in list(sys.modules.items()):
+        if mod is None:
+            continue
+        if "sonos_admin" in mod_name or "hsl3_22001" in mod_name:
+            fn = getattr(mod, "get_station_indices", None)
+            if callable(fn):
+                try:
+                    out = fn(player_spec)
+                    if isinstance(out, list):
+                        return [int(i) for i in out]
+                except Exception:
+                    pass
+            # Fallback for older Admin without get_station_indices:
+            # synthesize 1..count.
+            cnt_fn = getattr(mod, "get_station_count", None)
+            if callable(cnt_fn):
+                try:
+                    try:
+                        n = cnt_fn(player_spec)
+                    except TypeError:
+                        n = cnt_fn()
+                    if isinstance(n, int) and n > 0:
+                        return list(range(1, n + 1))
+                except Exception:
+                    pass
+    return []
 
 SERVICE_PATHS = {
     "AVTransport":      "/MediaRenderer/AVTransport/Control",
@@ -1537,11 +1582,13 @@ class LogicModule:
         with self._preset_lock:
             if not self._preset_still_current(version):
                 return  # overtaken by a newer preset request
-            # The Admin block's preset library is the single source
-            # of truth — there are no per-player preset slots anymore.
-            # If no match exists in the library (admin not loaded, or
-            # unknown spec) we surface PRESET_NOT_FOUND.
-            admin_rec = _lookup_station_via_admin(spec)
+            # Preset lookup is scoped to THIS player: per-player slots
+            # (1..10) win over the global library, and global presets
+            # start at index 11 (uniform across every player). The
+            # admin module performs the routing — see get_station() in
+            # LBS 22001. PRESET_NOT_FOUND surfaces when neither the
+            # player's own slots nor the global library carry a match.
+            admin_rec = _lookup_station_via_admin(spec, self._host_spec)
             if not admin_rec or not admin_rec.get("uri"):
                 if self._preset_still_current(version):
                     self.fw.run_in_context(
@@ -1653,11 +1700,14 @@ class LogicModule:
             self.fw.run_in_context(self._write_error, ("RADIO_START_FAILED",))
 
     def _action_step_preset(self, direction, version=None):
-        """Step one position through the Admin preset library and start
-        the resulting preset. ``direction`` is +1 (next) or -1 (prev).
-        Wraps at both ends so a single 1-bit KNX address can cycle
-        through the whole library. NO_PRESETS surfaces on LastError when
-        the library is empty or Admin isn't loaded.
+        """Step one position through this player's preset list and
+        start the resulting preset. ``direction`` is +1 (next) or -1
+        (prev). The cycle covers every CONFIGURED per-player slot
+        (1..10) and every global preset (11..(10+globalCount)) in
+        ascending order; empty per-player slots are skipped. Wraps at
+        both ends so a single 1-bit KNX address cycles through the
+        full combined list. NO_PRESETS surfaces on LastError when
+        nothing is configured at all.
 
         ``version`` is the generation tag captured by on_calc; passed
         through to _action_start_radio so a fast Next-press sequence
@@ -1665,15 +1715,23 @@ class LogicModule:
         every intermediate one."""
         if not self._preset_still_current(version):
             return  # superseded between dispatch and worker start
-        count = _admin_station_count()
-        if count <= 0:
+        indices = _admin_station_indices(self._host_spec)
+        if not indices:
             self.fw.run_in_context(self._write_error, ("NO_PRESETS",))
             return
         current = self._active_station
+        try:
+            pos = indices.index(int(current))
+        except ValueError:
+            # Current preset isn't in the list (e.g. just cleared, or
+            # the player has never started a preset yet). Treat as
+            # "before the first" so Next lands on indices[0] and Prev
+            # on indices[-1].
+            pos = -1 if direction > 0 else 0
         if direction > 0:
-            next_idx = 1 if current <= 0 else (current % count) + 1
+            next_idx = indices[(pos + 1) % len(indices)]
         else:
-            next_idx = count if current <= 1 else current - 1
+            next_idx = indices[(pos - 1) % len(indices)]
         self._action_start_radio(next_idx, version=version)
 
     # ----- Sound notifications ---------------------------------------------

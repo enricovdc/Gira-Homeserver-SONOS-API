@@ -10,7 +10,7 @@ Three LBS modules:
 | LBS | Name | Role |
 | --- | --- | --- |
 | **22000** | Sonos Player | One instance per Sonos player. Play / pause / stop / next / prev (both rising-edge and value-toggle inputs), volume, mute, shuffle, repeat, preset stepping through the Admin library, status outputs (discrete Is\* booleans, per-action \*Allowed flags so a Gira tile can grey out buttons the player would reject, Album, AlbumArtURI, active preset name, group info), UPnP event push. |
-| **22001** | Sonos Admin | Singleton companion. Web UI at `http://<hs-ip>:8080/` for managing players (by **UUID / MAC / IP / name**), a global preset library (radio / playlists / line-in / Bluetooth), group presets, project-wide Player Defaults, and Sonos Cloud OAuth. Runs periodic + KNX-triggerable SSDP discovery with a structured `DiscoveredPlayers` output. All inside HSL3, no external process. Optional but recommended. |
+| **22001** | Sonos Admin | Singleton companion. Web UI at `http://<hs-ip>:8080/` for managing players (by **UUID / MAC / IP / name**), a global preset library (radio / playlists / line-in / Bluetooth, indices 11+), up to 10 per-player preset slots on each player card (indices 1..10), group presets, project-wide Player Defaults, and Sonos Cloud OAuth. Runs periodic + KNX-triggerable SSDP discovery with a structured `DiscoveredPlayers` output. All inside HSL3, no external process. Optional but recommended. |
 | **22002** | Sonos Sound Enhancement | **Optional** per-player companion to LBS 22000. Bass, Treble, Loudness, soundbar Night Mode + Dialog Mode, Crossfade, Sleep Timer, soundbar TV input, status LED, battery (Move/Roam), group volume, surround + sub EQ, Trueplay status. Drop one in for any speaker that needs the extras; leave it off elsewhere. Soundbar / portable-only features no-op gracefully on other hardware. |
 
 Compatible with Sonos firmware **2024+ and 2026** and Gira HomeServer
@@ -45,6 +45,15 @@ firmware **4.13+** (HSL3 / Python 3.9 logic-module SDK).
 - **Group presets.** Predefine master + members in the Admin UI;
   trigger `GroupPreset` on any Player block to form the group.
   `Ungroup` breaks the player out again.
+- **Global + per-player presets.** Slots 1..10 on each Player block
+  are reserved for *per-player* presets configured under the
+  player's own card in the Admin UI — every player has its own
+  independent set. Global presets start at index 11 (alphabetical),
+  so the same global index points at the same preset on every
+  player. `PresetNextPrev` cycles the combined list (configured
+  per-player slots first, then globals), skipping empty slots and
+  wrapping at both ends. Per-player presets persist across
+  HomeServer restarts.
 - **KNX-friendly outputs.** ZoneName, Online, State, IsPlaying /
   IsPaused / IsStopped / IsTransitioning, PlayAllowed / PauseAllowed /
   StopAllowed / NextAllowed / PrevAllowed / ShuffleAllowed /
@@ -84,7 +93,7 @@ firmware **4.13+** (HSL3 / Python 3.9 logic-module SDK).
   project-wide *Player Defaults* plus optional per-player *Advanced
   overrides* on each player card. One place to tune, no input wires
   to maintain.
-- **143 unit tests** with a stubbed `Hsl3Framework`, runnable in CI.
+- **148 unit tests** with a stubbed `Hsl3Framework`, runnable in CI.
 
 ## Repository layout
 
@@ -106,7 +115,7 @@ firmware **4.13+** (HSL3 / Python 3.9 logic-module SDK).
 ├── scripts/
 │   └── build_hslz.py            packager → dist/*.hslz
 ├── tests/
-│   └── test_logic_modules.py    143 unit tests with a stubbed framework
+│   └── test_logic_modules.py    148 unit tests with a stubbed framework
 └── dist/
     ├── 22000_sonos_player.hslz  deployable archive (committed)
     ├── 22001_sonos_admin.hslz
@@ -155,7 +164,7 @@ on a machine that has the SDK.
 python3 tests/test_logic_modules.py
 ```
 
-143 tests covering: pure helpers (SOAP fault extraction, NOTIFY parsing,
+148 tests covering: pure helpers (SOAP fault extraction, NOTIFY parsing,
 URI normalisation, play-mode composition, transport-actions parsing,
 iso-8859-15 encoding), the
 `LogicModule` IO contract (string outputs are bytes, numeric outputs

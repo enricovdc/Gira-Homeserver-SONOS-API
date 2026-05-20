@@ -68,9 +68,20 @@ SONOS_TOKEN_URL = "https://api.sonos.com/login/v3/oauth/access"
 # inter-instance wiring. Guarded by a single lock.
 # ---------------------------------------------------------------------------
 
+# Per-player preset slots are a fixed-size sparse list. Slots 1..10 are
+# reserved for the player's own presets (configured under each player
+# card); global presets occupy indices 11..(10 + len(_stations)) so the
+# index of any given global preset is identical across every player —
+# wiring StartRadio = 14 to a KNX button picks the same global preset
+# regardless of which player block receives it. Per-player slots can be
+# sparse: a player with only slots 1 + 4 configured leaves 2/3/5/.../10
+# empty (lookups return None, PresetNextPrev skips them).
+PER_PLAYER_PRESET_SLOTS = 10
+
 _registry_lock = threading.RLock()
-_players = {}     # id(str) -> {"id","name","ip","mac","uuid","model","source"}
-_stations = {}    # id(str) -> {"id","name","uri","metadata"}
+_players = {}     # id(str) -> {"id","name","ip","mac","uuid","model","source",
+                  #              "presets": [{slot,name,uri,metadata,type}, ...] }
+_stations = {}    # id(str) -> {"id","name","uri","metadata"}  (global presets)
 _groups = {}      # id(str) -> {"id","name","master","members"} (master/members are player ids)
 _sounds = {}      # id(str) -> {"id","name","filename","source","size",
                   #              "_data" (raw bytes, excluded from JSON)}
@@ -316,50 +327,149 @@ def get_player_record(spec):
     return None
 
 
-def get_station_uri(index_or_name):
+def get_station_uri(index_or_name, player_spec=None):
     """Backwards-compat shim. Prefer get_station() which returns the full
     record including the DIDL-Lite metadata required for Sonos cloud
     favorites (TuneIn, Spotify, Apple Music). Returns '' when not found."""
-    rec = get_station(index_or_name)
+    rec = get_station(index_or_name, player_spec)
     return rec["uri"] if rec else ""
 
 
-def get_station(index_or_name):
-    """LBS 22000 calls this to fetch the full station record. Returns None
+def _player_preset_list(rec):
+    """Normalised list of {slot, name, uri, metadata, type} dicts for a
+    player record. Filters obvious garbage so a malformed retentive
+    store can't break preset dispatch."""
+    out = []
+    for p in (rec.get("presets") or []):
+        if not isinstance(p, dict):
+            continue
+        try:
+            slot = int(p.get("slot") or 0)
+        except (TypeError, ValueError):
+            continue
+        if not (1 <= slot <= PER_PLAYER_PRESET_SLOTS):
+            continue
+        name = (p.get("name") or "").strip()
+        uri = (p.get("uri") or "").strip()
+        if not name or not uri:
+            continue
+        out.append({
+            "slot":     slot,
+            "name":     name,
+            "uri":      uri,
+            "metadata": p.get("metadata") or "",
+            "type":     (p.get("type") or "").strip(),
+        })
+    # Sort by slot so the same slot order is exposed to every consumer.
+    out.sort(key=lambda p: p["slot"])
+    return out
+
+
+def get_station(index_or_name, player_spec=None):
+    """LBS 22000 calls this to fetch the full preset record. Returns None
     when not found. The returned dict has the keys ``id``, ``name``,
-    ``uri``, ``metadata`` and ``index`` — the metadata carries the
-    DIDL-Lite XML captured from a Sonos favorite so cloud-service items
-    play correctly (their music-service binding lives in the metadata,
-    not in the URI), and ``index`` is the 1-based alphabetical position
-    in the library so the caller can publish a stable ActiveStation
-    output regardless of whether the lookup was by name or by index."""
+    ``uri``, ``metadata``, ``type``, ``index`` and ``scope``.
+
+    When ``player_spec`` is supplied (IP / MAC / UUID / name of a known
+    player), per-player presets occupy indices 1..10 and the global
+    library starts at index 11 — so ``StartRadio = 14`` always means
+    "the third global preset" on every player. Name lookups search the
+    player's own presets first, then fall back to global. When
+    ``player_spec`` is None, indices map directly to the global library
+    1..N (the legacy behaviour, kept for Admin-internal callers and
+    older tests).
+
+    ``scope`` is "player" or "global" so a caller can tell which list
+    the match came from without re-resolving by index."""
     if index_or_name is None:
         return None
     key = str(index_or_name).strip()
+    if not key:
+        return None
     with _registry_lock:
         sorted_stations = sorted(_stations.values(), key=lambda s: s["name"].lower())
-        # Numeric: index into sorted list.
+        player_presets = []
+        if player_spec:
+            prec = get_player_record(player_spec) or {}
+            player_presets = _player_preset_list(prec)
+        # Numeric lookup ---------------------------------------------------
         if key.isdigit():
             idx = int(key)
+            if player_spec:
+                # Slots 1..10 → per-player.
+                if 1 <= idx <= PER_PLAYER_PRESET_SLOTS:
+                    for p in player_presets:
+                        if p["slot"] == idx:
+                            return {"id":       "p_{}_{}".format(prec.get("id", ""), idx),
+                                    "name":     p["name"],
+                                    "uri":      p["uri"],
+                                    "metadata": p["metadata"],
+                                    "type":     p["type"],
+                                    "index":    idx,
+                                    "scope":    "player"}
+                    return None
+                # ≥11 → global at offset (idx - 10).
+                gidx = idx - PER_PLAYER_PRESET_SLOTS
+                if 1 <= gidx <= len(sorted_stations):
+                    rec = dict(sorted_stations[gidx - 1])
+                    rec["index"] = idx
+                    rec["scope"] = "global"
+                    return rec
+                return None
+            # Legacy global-only mapping.
             if 1 <= idx <= len(sorted_stations):
                 rec = dict(sorted_stations[idx - 1])
                 rec["index"] = idx
+                rec["scope"] = "global"
                 return rec
             return None
-        # Name match (case-insensitive).
+        # Name lookup (case-insensitive) ----------------------------------
+        lower = key.lower()
+        for p in player_presets:
+            if p["name"].lower() == lower:
+                return {"id":       "p_{}_{}".format(prec.get("id", ""), p["slot"]),
+                        "name":     p["name"],
+                        "uri":      p["uri"],
+                        "metadata": p["metadata"],
+                        "type":     p["type"],
+                        "index":    p["slot"],
+                        "scope":    "player"}
         for i, rec in enumerate(sorted_stations, start=1):
-            if rec["name"].lower() == key.lower():
+            if rec["name"].lower() == lower:
                 r = dict(rec)
-                r["index"] = i
+                r["index"] = (PER_PLAYER_PRESET_SLOTS + i) if player_spec else i
+                r["scope"] = "global"
                 return r
     return None
 
 
-def get_station_count():
-    """Number of presets currently in the Admin library. LBS 22000's
-    PresetNextPrev input uses this to wrap around at the boundaries."""
+def get_station_count(player_spec=None):
+    """Highest valid preset index for the given player. PresetNextPrev
+    uses this together with get_station_indices() to wrap around. When
+    ``player_spec`` is given the count is ``PER_PLAYER_PRESET_SLOTS +
+    len(global)``; legacy callers (player_spec=None) get the raw global
+    count for backward compatibility."""
     with _registry_lock:
+        if player_spec:
+            return PER_PLAYER_PRESET_SLOTS + len(_stations)
         return len(_stations)
+
+
+def get_station_indices(player_spec=None):
+    """Ordered list of every CONFIGURED preset index for the given
+    player — used by LBS 22000's PresetNextPrev so the cycle skips
+    empty per-player slots. With ``player_spec`` set: configured
+    per-player slots (1..10) come first, then every global preset
+    starting at 11. Without ``player_spec``: 1..len(global)."""
+    with _registry_lock:
+        gcount = len(_stations)
+        if not player_spec:
+            return list(range(1, gcount + 1))
+        prec = get_player_record(player_spec) or {}
+        player_slots = sorted(p["slot"] for p in _player_preset_list(prec))
+        global_idxs = list(range(PER_PLAYER_PRESET_SLOTS + 1,
+                                 PER_PLAYER_PRESET_SLOTS + 1 + gcount))
+        return player_slots + global_idxs
 
 
 # ---------------------------------------------------------------------------
@@ -888,12 +998,18 @@ code { background: #f5f5f5; padding: 1px 6px; border: 1px solid #e8e8e8;
                                margin-bottom: 2px; }
 .player-card .pc-field input { width: 100%; }
 .player-card .pc-actions { display: flex; gap: 4px; align-items: end; }
-.player-card .pc-tunables { margin-top: 8px; }
-.player-card .pc-tunables summary { cursor: pointer; color: #606060;
+.player-card .pc-tunables, .player-card .pc-presets { margin-top: 8px; }
+.player-card .pc-tunables summary, .player-card .pc-presets summary {
+  cursor: pointer; color: #606060;
   font-size: 11px; user-select: none; padding: 4px 0; }
-.player-card .pc-tunables summary:hover { color: #202020; }
-.player-card .pc-tunables[open] summary { color: #202020; }
+.player-card .pc-tunables summary:hover,
+.player-card .pc-presets summary:hover { color: #202020; }
+.player-card .pc-tunables[open] summary,
+.player-card .pc-presets[open] summary { color: #202020; }
 .player-card .pc-tunables .pc-grid { margin-top: 6px; }
+.player-card .pc-presets .pp-table { margin-top: 4px; }
+.player-card .pc-presets .pp-table th { background: #f5f5f5; }
+.player-card .pc-presets .pp-table input { padding: 4px 6px; }
 .player-card .pc-meta { margin-top: 6px; font-size: 11px; color: #808080;
                         display: flex; gap: 12px; flex-wrap: wrap; }
 .player-card .pc-meta .pc-model { color: #505050; }
@@ -980,16 +1096,20 @@ details.group-add .row { margin-top: 6px; }
   </section>
 
   <section>
-    <h2>Presets</h2>
+    <h2>Global presets</h2>
     <p class="muted">
-      Presets are anything playable — radio stations, Sonos favorites,
-      Spotify / Apple Music playlists, Sonos saved queues, and line-in
-      sources from a Connect:Amp / Port / Five.
+      Global presets are shared by every Sonos Player block — radio
+      stations, Sonos favorites, Spotify / Apple Music playlists, Sonos
+      saved queues, and line-in sources from a Connect:Amp / Port / Five.
       Wire one of the Sonos Player block's two preset-trigger inputs:
       write the <strong>#</strong> shown below into <code>StartRadio</code>
       (numeric), or write the <strong>Name</strong> into
       <code>StartRadioName</code> (string, case-insensitive).
-      Adding or removing presets re-numbers the index list alphabetically.
+      Global presets start at index <strong>11</strong> — indices 1..10
+      are reserved for the <em>per-player presets</em> configured on
+      each player card above. So <code>StartRadio = 14</code> always
+      means "the third global preset" on every player.
+      Adding or removing entries re-numbers the alphabetical index.
     </p>
     <table id="stations">
       <thead><tr>
@@ -1178,8 +1298,60 @@ async function copyToClipboard(text) {
     return ok;
   } catch (e) { return false; }
 }
+// Maximum per-player preset slots, set from /api/players response.
+// 10 by design but kept dynamic so the UI follows the server.
+let _presetSlots = 10;
+
+// Build the inner HTML for one player's per-player-preset table. Each
+// row is either a configured preset (name + URI + Type + delete) or
+// an empty slot with inline name + URI inputs and a Save button. The
+// click + change handlers further down route the values into PUT /
+// DELETE on /api/players/{pid}/presets/{slot}.
+function renderPlayerPresets(p) {
+  const byslot = {};
+  for (const ps of (p.presets || [])) byslot[ps.slot] = ps;
+  let rows = '';
+  for (let n = 1; n <= _presetSlots; n++) {
+    const ps = byslot[n];
+    if (ps) {
+      const typeBadge = ps.type
+        ? '<span class="fav-type">' + esc(ps.type) + '</span>' : '<span class="muted">—</span>';
+      rows +=
+        '<tr>' +
+          '<td><strong>' + n + '</strong></td>' +
+          '<td>' + typeBadge + '</td>' +
+          '<td><input data-pp-edit="' + esc(p.id) + '" data-slot="' + n + '" data-field="name" value="' + esc(ps.name) + '"></td>' +
+          '<td><input data-pp-edit="' + esc(p.id) + '" data-slot="' + n + '" data-field="uri" value="' + esc(ps.uri) + '"></td>' +
+          '<td><button class="danger small" data-pp-del="' + esc(p.id) + '" data-slot="' + n + '">x</button></td>' +
+        '</tr>';
+    } else {
+      rows +=
+        '<tr>' +
+          '<td><strong>' + n + '</strong></td>' +
+          '<td><span class="muted">—</span></td>' +
+          '<td><input data-pp-new="' + esc(p.id) + '" data-slot="' + n + '" data-field="name" placeholder="(empty)"></td>' +
+          '<td><input data-pp-new="' + esc(p.id) + '" data-slot="' + n + '" data-field="uri" placeholder="stream URL or favorite URI"></td>' +
+          '<td><button class="small" data-pp-add="' + esc(p.id) + '" data-slot="' + n + '">Add</button></td>' +
+        '</tr>';
+    }
+  }
+  return (
+    '<table class="pp-table">' +
+      '<thead><tr>' +
+        '<th style="width:5%">#</th>' +
+        '<th style="width:9%">Type</th>' +
+        '<th style="width:30%">Name</th>' +
+        '<th>URI</th>' +
+        '<th style="width:8%">Actions</th>' +
+      '</tr></thead><tbody>' + rows + '</tbody>' +
+    '</table>'
+  );
+}
+
 async function refreshPlayers() {
   const r = await api('GET', '/api/players');
+  if (r.presetSlots) _presetSlots = r.presetSlots;
+  const presetSlots = _presetSlots;
   const list = document.getElementById('players');
   list.innerHTML = '';
   for (const p of r.players) {
@@ -1256,6 +1428,22 @@ async function refreshPlayers() {
                    'value="' + esc(p.callbackBase || '') + '" placeholder="default (auto from LAN IP)">' +
           '</div>' +
         '</div>' +
+      '</details>' +
+      // Per-player preset slots. 1..10 are always shown; configured
+      // slots carry name + URI + Type, empty slots show "(empty)".
+      // The index in this card is what the integrator writes into
+      // StartRadio on the Player block — and it never collides with
+      // global presets because those start at 11.
+      '<details class="pc-presets">' +
+        '<summary>Per-player presets (slots 1&ndash;' + presetSlots + ')</summary>' +
+        '<p class="muted" style="margin:4px 0 6px">' +
+          'Triggering slot <strong>N</strong> on this player plays the ' +
+          'preset stored in slot N. Empty slots are skipped by ' +
+          '<code>PresetNextPrev</code>. Slot index is local to this ' +
+          'player; the same slot number on another player can hold a ' +
+          'different preset.' +
+        '</p>' +
+        renderPlayerPresets(p) +
       '</details>' +
       '<div class="pc-favs" id="favs-' + esc(p.id) + '"></div>';
     list.appendChild(card);
@@ -1592,6 +1780,24 @@ document.addEventListener('change', async (ev) => {
                     { [t.dataset.field]: t.value }); toast('Saved'); }
     catch (e) { toast(e.message, true); }
   }
+  // Per-player preset inline edit: name OR uri changed on an already-
+  // configured slot. Re-PUT the whole record (name + uri are both
+  // required server-side) so a partial edit doesn't drop the other
+  // field.
+  if (t.dataset.ppEdit && t.dataset.slot) {
+    const pid = t.dataset.ppEdit;
+    const slot = t.dataset.slot;
+    const row = t.closest('tr');
+    const name = (row.querySelector('input[data-field="name"]').value || '').trim();
+    const uri = (row.querySelector('input[data-field="uri"]').value || '').trim();
+    if (!name || !uri) return;  // server would error; keep silent on partial edits
+    try {
+      await api('PUT', '/api/players/' + encodeURIComponent(pid) +
+                       '/presets/' + encodeURIComponent(slot),
+                { name, uri });
+      toast('Saved');
+    } catch (e) { toast(e.message, true); }
+  }
 });
 document.addEventListener('click', async (ev) => {
   const t = ev.target;
@@ -1609,6 +1815,30 @@ document.addEventListener('click', async (ev) => {
       if (!confirm('Remove sound?')) return;
       await api('DELETE', '/api/sounds/' + encodeURIComponent(t.dataset.delSound));
       refreshAll();
+    }
+    // Per-player preset: add a new slot from the inline empty-row inputs.
+    if (t.dataset.ppAdd && t.dataset.slot) {
+      const pid = t.dataset.ppAdd;
+      const slot = t.dataset.slot;
+      const row = t.closest('tr');
+      const name = (row.querySelector('input[data-field="name"]').value || '').trim();
+      const uri = (row.querySelector('input[data-field="uri"]').value || '').trim();
+      if (!name) return toast('preset name required', true);
+      if (!uri) return toast('preset URI required', true);
+      await api('PUT', '/api/players/' + encodeURIComponent(pid) +
+                       '/presets/' + encodeURIComponent(slot),
+                { name, uri });
+      toast('Slot ' + slot + ' saved');
+      refreshPlayers();
+    }
+    // Per-player preset: clear a configured slot.
+    if (t.dataset.ppDel && t.dataset.slot) {
+      const pid = t.dataset.ppDel;
+      const slot = t.dataset.slot;
+      if (!confirm('Clear preset slot ' + slot + '?')) return;
+      await api('DELETE', '/api/players/' + encodeURIComponent(pid) +
+                          '/presets/' + encodeURIComponent(slot));
+      refreshPlayers();
     }
     if (t.dataset.host !== undefined) {
       // Copy the UUID into the clipboard. navigator.clipboard.writeText
@@ -1990,6 +2220,10 @@ class _AdminHandler(BaseHTTPRequestHandler):
             if m:
                 pid = urllib.parse.unquote(m.group(1))
                 return self._send(200, self.server.admin.api_player_playlists(pid))
+            m = re.match(r"^/api/players/(.+)/presets$", path)
+            if m:
+                pid = urllib.parse.unquote(m.group(1))
+                return self._send(200, self.server.admin.api_list_player_presets(pid))
             self._err(404, "NOT_FOUND", "no such route")
         except ValueError as exc:
             # Domain-validation errors (unknown player id, missing IP, …)
@@ -2038,7 +2272,14 @@ class _AdminHandler(BaseHTTPRequestHandler):
                 return self._send(200, self.server.admin.api_set_cloud(body))
             if path == "/api/player-defaults":
                 return self._send(200, self.server.admin.api_set_player_defaults(body))
+            m = re.match(r"^/api/players/(.+)/presets/(\d+)$", path)
+            if m:
+                pid = urllib.parse.unquote(m.group(1))
+                slot = m.group(2)
+                return self._send(200, self.server.admin.api_set_player_preset(pid, slot, body))
             self._err(404, "NOT_FOUND", "no such route")
+        except ValueError as exc:
+            self._err(400, "INVALID_ARG", str(exc))
         except Exception as exc:  # noqa: BLE001
             self._err(500, "INTERNAL", str(exc))
 
@@ -2069,6 +2310,11 @@ class _AdminHandler(BaseHTTPRequestHandler):
     def do_DELETE(self):  # noqa: N802
         try:
             path = urllib.parse.urlparse(self.path).path
+            m = re.match(r"^/api/players/(.+)/presets/(\d+)$", path)
+            if m:
+                pid = urllib.parse.unquote(m.group(1))
+                slot = m.group(2)
+                return self._send(200, self.server.admin.api_remove_player_preset(pid, slot))
             m = re.match(r"^/api/players/(.+)$", path)
             if m:
                 return self._send(200, self.server.admin.api_remove_player(urllib.parse.unquote(m.group(1))))
@@ -2467,10 +2713,18 @@ class LogicModule:
 
     def api_list_players(self):
         with _registry_lock:
-            players = list(_players.values())
+            # Emit a shallow copy of every record with a normalised
+            # `presets` list so the UI can render each card's per-player
+            # preset slots without an extra request per player.
+            players = []
+            for rec in _players.values():
+                copy = dict(rec)
+                copy["presets"] = _player_preset_list(rec)
+                players.append(copy)
         return {
             "ok": True,
             "players": sorted(players, key=lambda p: (p.get("name") or "", p.get("ip") or "")),
+            "presetSlots": PER_PLAYER_PRESET_SLOTS,
             "lastDiscoveryAt": (time.strftime("%Y-%m-%dT%H:%M:%S",
                                               time.localtime(self._last_discovery_at))
                                 if self._last_discovery_at else None),
@@ -2691,6 +2945,74 @@ class LogicModule:
             removed = _stations.pop(sid, None)
         if removed is None:
             raise ValueError("unknown station id")
+        self._sync_async()
+        return {"ok": True}
+
+    # ----- Per-player presets ---------------------------------------------
+    #
+    # Each player carries up to PER_PLAYER_PRESET_SLOTS (10) presets in
+    # its own `presets` field. Slot numbers are fixed at 1..10 so a
+    # given slot always means the same preset on that player. Global
+    # presets keep their separate registry; they're addressed at
+    # indices 11..(10 + len(_stations)) so global indices are
+    # identical across every player. Together the per-player +
+    # global lists feed PresetNextPrev on the Sonos Player block.
+
+    def api_list_player_presets(self, pid):
+        with _registry_lock:
+            rec = _players.get(pid)
+            if rec is None:
+                raise ValueError("unknown player id")
+            presets = _player_preset_list(rec)
+        return {"ok": True,
+                "playerId": pid,
+                "slots": PER_PLAYER_PRESET_SLOTS,
+                "presets": presets}
+
+    def api_set_player_preset(self, pid, slot, body):
+        """Upsert a per-player preset at the given slot (1..10). Body
+        carries name + uri (required) plus optional metadata + type —
+        same shape as the global preset record. Empty name/uri clears
+        the slot (same effect as DELETE)."""
+        try:
+            slot = int(slot)
+        except (TypeError, ValueError):
+            raise ValueError("slot must be 1..{}".format(PER_PLAYER_PRESET_SLOTS))
+        if not (1 <= slot <= PER_PLAYER_PRESET_SLOTS):
+            raise ValueError("slot out of range 1..{}".format(PER_PLAYER_PRESET_SLOTS))
+        name = (body.get("name") or "").strip()
+        uri = (body.get("uri") or "").strip()
+        metadata = body.get("metadata") or ""
+        ptype = (body.get("type") or "").strip()
+        with _registry_lock:
+            rec = _players.get(pid)
+            if rec is None:
+                raise ValueError("unknown player id")
+            presets = [p for p in (rec.get("presets") or [])
+                       if isinstance(p, dict) and int(p.get("slot") or 0) != slot]
+            if name and uri:
+                presets.append({"slot": slot, "name": name, "uri": uri,
+                                "metadata": metadata, "type": ptype})
+            rec["presets"] = presets
+        self._sync_async()
+        return {"ok": True,
+                "playerId": pid,
+                "slot": slot,
+                "presets": _player_preset_list(rec)}
+
+    def api_remove_player_preset(self, pid, slot):
+        try:
+            slot = int(slot)
+        except (TypeError, ValueError):
+            raise ValueError("slot must be 1..{}".format(PER_PLAYER_PRESET_SLOTS))
+        with _registry_lock:
+            rec = _players.get(pid)
+            if rec is None:
+                raise ValueError("unknown player id")
+            before = rec.get("presets") or []
+            after = [p for p in before
+                     if isinstance(p, dict) and int(p.get("slot") or 0) != slot]
+            rec["presets"] = after
         self._sync_async()
         return {"ok": True}
 
