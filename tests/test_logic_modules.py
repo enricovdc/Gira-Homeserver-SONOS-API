@@ -1933,6 +1933,34 @@ class TestPlayerStationFromAdmin(unittest.TestCase):
             "watchdog must call _start_server with the previously-bound port")
         self.assertEqual(fw.outputs.get("ListenPort"), 8080.0)
 
+    def test_publish_admin_url_writes_browsable_url_to_debug(self):
+        """The integrator looks at the HS debug page for a clickable
+        link to the admin UI. _publish_admin_url must format the URL
+        as 'http://<lan-ip>:<port>/' so the HS web UI's auto-linkify
+        works. When LAN-IP detection fails it must fall back to a
+        '<homeserver-ip>' placeholder rather than 127.0.0.1, otherwise
+        the link would be useless on any browser other than the HS's
+        own console."""
+        adm = self.admin
+        fw = StubFramework()
+        lm = adm.LogicModule(fw)
+        lm.fw = fw
+        lm.debug = fw.create_debug_section()
+        # Force a believable IP rather than running the live UDP trick.
+        adm._get_local_lan_ip = lambda: "192.168.10.5"
+        lm._publish_admin_url(8080)
+        self.assertEqual(lm.debug.fields["Admin URL"],
+                         "http://192.168.10.5:8080/")
+        # Fallback: detection returns "" / 127.0.0.1.
+        adm._get_local_lan_ip = lambda: ""
+        lm._publish_admin_url(9090)
+        self.assertEqual(lm.debug.fields["Admin URL"],
+                         "http://<homeserver-ip>:9090/")
+        adm._get_local_lan_ip = lambda: "127.0.0.1"
+        lm._publish_admin_url(8081)
+        self.assertEqual(lm.debug.fields["Admin URL"],
+                         "http://<homeserver-ip>:8081/")
+
     def test_ensure_server_alive_leaves_live_thread_alone(self):
         """A healthy server thread must not be touched by the watchdog
         — otherwise every Tick would churn the HTTP server."""

@@ -227,6 +227,28 @@ def _resolve_ip_for_mac(mac):
     return ""
 
 
+def _get_local_lan_ip():
+    """Best-effort LAN IP of the HomeServer running this module —
+    used to build the Admin URL printed on the debug page and on
+    the embeddable tile fragment. Avoids DNS / hostname lookups so
+    a misconfigured /etc/hosts can't return 127.0.0.1. Falls back
+    to "" when the UDP probe trick isn't available (the caller
+    substitutes a hostname placeholder)."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            # No packet is actually sent for a UDP connect — Linux
+            # simply picks the source address it would use to reach
+            # the given destination. 8.8.8.8 is convenient (always
+            # routed via the default gateway).
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+        finally:
+            s.close()
+    except OSError:
+        return ""
+
+
 # ---------------------------------------------------------------------------
 # Resolution function called by LBS 22000 when its Host input doesn't look
 # like an IP. Exported via module globals so the player module can grab it
@@ -2431,6 +2453,11 @@ class LogicModule:
 
     def on_init(self, inputs, store):
         self.debug = self.fw.create_debug_section()
+        # Define field order up front — the HS debug page renders fields
+        # in the order they were first set. "Admin URL" sits at the top
+        # so the integrator can copy/click it without scrolling past the
+        # status counters.
+        self.debug.set("Admin URL", "starting...")
         self.debug.set("Listener port", 0)
         self.debug.set("Players", 0)
         self.debug.set("Presets", 0)
@@ -2453,11 +2480,13 @@ class LogicModule:
         bound = self._start_server(port)
         if bound is None:
             self.fw.set_output("LastError", b"PORT_BIND_FAILED")
+            self.debug.set("Admin URL", "PORT_BIND_FAILED")
             self.logger.error("Admin: could not bind HTTP port; UI disabled")
             return
         self.listener_port = bound
         self.fw.set_output("ListenPort", float(bound))
         self.debug.set("Listener port", float(bound))
+        self._publish_admin_url(bound)
 
         # Register this instance for cross-LBS access.
         _admin_instance_ref["instance"] = self
@@ -2492,6 +2521,29 @@ class LogicModule:
             # the UI back. set_output runs in node context (Tick fires
             # in the right place).
             self._ensure_server_alive()
+
+    def _publish_admin_url(self, port):
+        """Write the admin UI's URL to the debug page as a string.
+        Hsl3DebugSection only accepts int/float/str — there's no
+        clickable-link API — but most HS debug renderers auto-linkify
+        URL-shaped strings so the integrator can jump straight to the
+        UI from F1/debug. Falls back to ``http://<port>/`` when LAN-IP
+        detection fails (the integrator can swap in the HS hostname
+        manually)."""
+        if self.debug is None:
+            return
+        try:
+            ip = _get_local_lan_ip() or ""
+        except Exception:
+            ip = ""
+        if ip and ip != "127.0.0.1":
+            url = "http://{}:{}/".format(ip, port)
+        else:
+            url = "http://<homeserver-ip>:{}/".format(port)
+        try:
+            self.debug.set("Admin URL", url)
+        except Exception:
+            pass
 
     def _ensure_server_alive(self):
         """Restart the HTTP server thread if it died. Idempotent — a
@@ -2542,6 +2594,9 @@ class LogicModule:
                 self.debug.inc("Rebinds")
             except Exception:
                 pass
+        # The IP could have changed since the last bind (DHCP renumber);
+        # refresh the URL too so the debug page stays accurate.
+        self._publish_admin_url(bound)
 
     # ----- HTTP server lifecycle ------------------------------------------
 
