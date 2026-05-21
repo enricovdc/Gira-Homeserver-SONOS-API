@@ -966,13 +966,18 @@ class LogicModule:
             _instances_by_host[self._host_spec] = self
 
         # Start the NOTIFY listener (idempotent — only first call binds).
+        # Debug key is "Notify port" (not "Listener port") so it doesn't
+        # collide with the Admin block's HTTP listener key in the shared
+        # sonos_bridge debug section — the HS web UI merges debug values
+        # across instances by key.
         bound = _ensure_listener_started(self._notify_port)
         if bound is not None:
             self._notify_port = bound
-            self.debug.set("Listener port", float(bound))
+            self.debug.set("Notify port", float(bound))
         else:
             self.logger.warning("Could not bind NOTIFY listener; eventing disabled")
-            self.debug.set("Listener port", to_iso_bytes("disabled"))
+            # debug.set only accepts int/float/str — never bytes.
+            self.debug.set("Notify port", "disabled")
 
         # Best-effort synchronous ZoneName from the Admin registry so the
         # output isn't blank for the first 5 s until the Tick HTTP fetch
@@ -2332,7 +2337,11 @@ class LogicModule:
 
     def _write_error(self, code):
         if self.debug is not None:
-            self.debug.set("Last error", to_iso_bytes(str(code)))
+            # debug.set only accepts int/float/str — never bytes. Earlier
+            # builds passed iso-8859-15 bytes here and threw ValueError on
+            # every error write, which the HomeServer surfaced as a noisy
+            # exception counter in the debug page.
+            self.debug.set("Last error", str(code))
         self._publish_text("LastError", str(code))
 
     def _inc_debug(self, key):

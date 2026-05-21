@@ -983,8 +983,11 @@ class LogicModule:
             self.debug.timestamp("Sleep dispatched")
 
     def _write_error(self, code):
+        # debug.set only accepts int/float/str — never bytes. Earlier
+        # builds passed iso-8859-15 bytes here and threw ValueError on
+        # every error write.
         if self.debug is not None:
-            self.debug.set("Last error", to_iso_bytes(str(code)))
+            self.debug.set("Last error", str(code))
         self.fw.set_output("LastError", to_iso_bytes(str(code)))
 
     def _inc_poll(self):

@@ -62,6 +62,14 @@ class StubDebug:
         self.logs = []
 
     def set(self, name, value):
+        # Mirror the real HSL3 framework's type check: debug values must
+        # be int / float / str. Passing bytes (or anything else) raises
+        # at runtime; reproduce that here so regressions are caught in CI
+        # instead of only on the HomeServer.
+        if not isinstance(value, (int, float, str)):
+            raise ValueError(
+                "Value not int, float or str (got {})".format(type(value).__name__)
+            )
         self.fields[name] = value
 
     def inc(self, name, value=1):
