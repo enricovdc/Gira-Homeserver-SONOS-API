@@ -2484,6 +2484,64 @@ class LogicModule:
         if timer["Tick"].changed:
             self.fw.set_timer("Tick", self._auto_discover_s)
             self._spawn_discovery()
+            # Watchdog: if the HTTP server thread died (BaseHTTPServer
+            # can exit on certain socket errors — FD exhaustion, OOM
+            # inside a worker, etc.) the admin web UI becomes silently
+            # unreachable. Detect the dead thread here and re-bind so
+            # the user doesn't have to restart the HomeServer to get
+            # the UI back. set_output runs in node context (Tick fires
+            # in the right place).
+            self._ensure_server_alive()
+
+    def _ensure_server_alive(self):
+        """Restart the HTTP server thread if it died. Idempotent — a
+        live thread is left alone. Called from on_timer so the check
+        runs on every discovery tick."""
+        thread_dead = (self.server_thread is None
+                       or not self.server_thread.is_alive())
+        if not thread_dead:
+            return
+        try:
+            self.logger.warning("Admin HTTP server thread died — rebinding")
+        except Exception:
+            pass
+        # Tear down whatever's left so we don't leak the old socket.
+        try:
+            if self.server is not None:
+                self.server.shutdown()
+        except Exception:
+            pass
+        try:
+            if self.server is not None:
+                self.server.server_close()
+        except Exception:
+            pass
+        self.server = None
+        self.server_thread = None
+        # Try the same port the previous bind succeeded on first; fall
+        # back through the range / ephemeral.
+        bound = self._start_server(self.listener_port or 0)
+        if bound is None:
+            try:
+                self.fw.set_output("LastError", b"PORT_BIND_FAILED")
+            except Exception:
+                pass
+            try:
+                self.logger.error("Admin: rebind failed; UI still down")
+            except Exception:
+                pass
+            return
+        self.listener_port = bound
+        try:
+            self.fw.set_output("ListenPort", float(bound))
+        except Exception:
+            pass
+        if self.debug is not None:
+            try:
+                self.debug.set("Listener port", float(bound))
+                self.debug.inc("Rebinds")
+            except Exception:
+                pass
 
     # ----- HTTP server lifecycle ------------------------------------------
 
@@ -2504,14 +2562,43 @@ class LogicModule:
                 continue
             server.admin = self
             self.server = server
+            # Wrap serve_forever so any exception that escapes (FD
+            # exhaustion in accept(), OOM in a worker, anything else
+            # BaseHTTPServer doesn't catch) lands in the logger and
+            # the debug page instead of vanishing silently. The
+            # watchdog in on_timer then rebinds.
             self.server_thread = threading.Thread(
-                target=server.serve_forever,
+                target=self._serve_until_dead,
+                args=(server,),
                 name="sonos-admin-http",
                 daemon=True,
             )
             self.server_thread.start()
             return port
         return None
+
+    def _serve_until_dead(self, server):
+        """Run serve_forever and capture whatever kills it so the
+        crash cause is visible — otherwise BaseHTTPServer's silent
+        thread exit is impossible to diagnose."""
+        try:
+            server.serve_forever()
+        except Exception as exc:  # noqa: BLE001
+            try:
+                self.logger.error(
+                    "Admin HTTP server crashed: %s: %s",
+                    type(exc).__name__, exc,
+                )
+            except Exception:
+                pass
+            if self.debug is not None:
+                try:
+                    self.debug.set(
+                        "HTTP crash",
+                        "{}: {}".format(type(exc).__name__, str(exc)[:120]),
+                    )
+                except Exception:
+                    pass
 
     # ----- Discovery -------------------------------------------------------
 

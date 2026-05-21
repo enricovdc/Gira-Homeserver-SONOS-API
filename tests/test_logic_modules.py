@@ -1904,6 +1904,53 @@ class TestPlayerStationFromAdmin(unittest.TestCase):
             stored = adm._players["pA"].get("presets") or []
         self.assertEqual(stored, [])
 
+    def test_ensure_server_alive_rebinds_dead_thread(self):
+        """When BaseHTTPServer's worker thread exits (FD exhaustion,
+        OOM, …) the admin web UI silently dies. The on_timer watchdog
+        must notice the dead thread and rebind so the user doesn't
+        have to restart the HomeServer to recover the UI."""
+        adm = self.admin
+        fw = StubFramework()
+        lm = adm.LogicModule(fw)
+        lm.fw = fw
+        lm.debug = fw.create_debug_section()
+        lm.listener_port = 8080
+        # Simulate a dead thread + a torn-down server. The watchdog
+        # must call _start_server and write the new port to outputs.
+        lm.server_thread = None
+        lm.server = None
+        rebind_calls = []
+        def fake_start(preferred_port):
+            rebind_calls.append(preferred_port)
+            lm.server = object()
+            class _Alive:
+                def is_alive(self): return True
+            lm.server_thread = _Alive()
+            return 8080
+        lm._start_server = fake_start
+        lm._ensure_server_alive()
+        self.assertEqual(rebind_calls, [8080],
+            "watchdog must call _start_server with the previously-bound port")
+        self.assertEqual(fw.outputs.get("ListenPort"), 8080.0)
+
+    def test_ensure_server_alive_leaves_live_thread_alone(self):
+        """A healthy server thread must not be touched by the watchdog
+        — otherwise every Tick would churn the HTTP server."""
+        adm = self.admin
+        fw = StubFramework()
+        lm = adm.LogicModule(fw)
+        lm.fw = fw
+        lm.debug = fw.create_debug_section()
+        class _Alive:
+            def is_alive(self): return True
+        lm.server_thread = _Alive()
+        lm.server = object()
+        rebind_calls = []
+        lm._start_server = lambda p: rebind_calls.append(p) or 0
+        lm._ensure_server_alive()
+        self.assertEqual(rebind_calls, [],
+            "watchdog must NOT rebind when the thread is alive")
+
     def test_action_play_sound_uses_native_audioclip_when_available(self):
         """The primary path on modern S2 firmware is the native
         AudioClip service — single SOAP call, Sonos handles ducking +
