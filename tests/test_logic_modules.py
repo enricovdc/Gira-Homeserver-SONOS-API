@@ -1961,6 +1961,55 @@ class TestPlayerStationFromAdmin(unittest.TestCase):
         self.assertEqual(lm.debug.fields["Admin URL"],
                          "http://<homeserver-ip>:8081/")
 
+    def test_active_preset_persists_across_restart(self):
+        """The user reported that the selected preset is lost after a
+        HomeServer reboot. _mark_active_station now writes the {idx,
+        name} pair to the PersistedActivePreset retentive store; the
+        next on_init restores it so ActiveStation / ActiveStationName
+        come back populated before any SOAP poll or NOTIFY arrives."""
+        fw = StubFramework()
+        lm = self.player.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        lm._mark_active_station(13, "Kitchen Mix")
+        # Persisted as iso-8859-15 bytes per the HSL3 string-store
+        # contract; payload is a small JSON object so a corrupt
+        # / unreadable value can't break startup.
+        stored = fw.stores.get("PersistedActivePreset")
+        self.assertIsNotNone(stored, "no PersistedActivePreset written")
+        self.assertIsInstance(stored, bytes)
+        import json
+        data = json.loads(stored.decode("iso-8859-15"))
+        self.assertEqual(data, {"idx": 13, "name": "Kitchen Mix"})
+        # Fresh LogicModule (simulating HS restart); restore must
+        # republish the outputs.
+        fw2 = StubFramework()
+        lm2 = self.player.LogicModule(fw2)
+        lm2.debug = fw2.create_debug_section()
+        class _SS:
+            def __init__(self, v): self.value = v
+        store = {"PersistedActivePreset": _SS(stored)}
+        lm2._restore_active_preset(store)
+        self.assertEqual(lm2._active_station, 13)
+        self.assertEqual(lm2._active_station_name, "Kitchen Mix")
+        self.assertEqual(fw2.outputs.get("ActiveStation"), 13.0)
+        self.assertEqual(fw2.outputs.get("ActiveStationName"),
+                         b"Kitchen Mix")
+
+    def test_active_preset_restore_skips_garbage(self):
+        """Malformed / empty store entries must not crash on_init —
+        they simply leave the defaults in place so the visualisation
+        starts blank rather than failing the whole module bring-up."""
+        fw = StubFramework()
+        lm = self.player.LogicModule(fw)
+        lm.debug = fw.create_debug_section()
+        class _SS:
+            def __init__(self, v): self.value = v
+        for bad in (b"", b"not-json{{{", b'"just-a-string"', b"[]", b'{"idx":"x"}'):
+            lm2 = self.player.LogicModule(StubFramework())
+            lm2._restore_active_preset({"PersistedActivePreset": _SS(bad)})
+            self.assertEqual(lm2._active_station, 0,
+                "malformed store '{}' must not advance active station".format(bad))
+
     def test_ensure_server_alive_leaves_live_thread_alone(self):
         """A healthy server thread must not be touched by the watchdog
         — otherwise every Tick would churn the HTTP server."""

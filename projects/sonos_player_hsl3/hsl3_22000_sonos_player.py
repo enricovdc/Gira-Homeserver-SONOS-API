@@ -11,6 +11,7 @@ for players that reject our SetAVTransportURI payload.
 Inputs / outputs / store / timer keys must match config.json.
 """
 
+import json
 import re
 import socket
 import sys
@@ -960,6 +961,15 @@ class LogicModule:
         self.debug.set("Last error", "-")
 
         self._reload_config(inputs)
+        # Restore the last-known active preset from the retentive store
+        # so the visualisation still shows what the speaker was playing
+        # before the HomeServer reboot. The store carries a small JSON
+        # object {"idx": N, "name": "..."} so the index AND the display
+        # name both come back without having to re-resolve through Admin
+        # (which may still be initialising). The outputs are published
+        # immediately; a stale entry simply gets overwritten by the
+        # first preset trigger or the next NOTIFY.
+        self._restore_active_preset(store)
         # Register under the spec (raw Host input) — typically a UUID — so
         # the NOTIFY routing key stays stable across IP changes.
         if self._host_spec:
@@ -2308,7 +2318,8 @@ class LogicModule:
         """Update the ActiveStation + ActiveStationName outputs after a
         successful preset start. ``idx`` is the 1-based alphabetical
         position in the Admin library (0 = unknown); ``name`` is the
-        preset's display name."""
+        preset's display name. Also persists the pair to the retentive
+        store so the choice survives a HomeServer restart."""
         try:
             idx = int(idx)
         except (TypeError, ValueError):
@@ -2317,6 +2328,64 @@ class LogicModule:
         self._active_station_name = name or ""
         self.fw.set_output("ActiveStation", float(idx))
         self._publish_text("ActiveStationName", self._active_station_name)
+        self._persist_active_preset()
+
+    def _persist_active_preset(self):
+        """Write the current ActiveStation + ActiveStationName to the
+        PersistedActivePreset retentive store. Called from node context
+        (every _mark_active_station path) so set_store is legal here.
+        Silently swallows the rare serialization / store failure rather
+        than surfacing it on LastError — persistence is best-effort
+        polish, not control-critical."""
+        try:
+            payload = json.dumps({
+                "idx":  int(self._active_station or 0),
+                "name": self._active_station_name or "",
+            }, separators=(",", ":"))
+            self.fw.set_store(
+                "PersistedActivePreset",
+                payload.encode("iso-8859-15", "replace"),
+            )
+        except Exception:
+            pass
+
+    def _restore_active_preset(self, store):
+        """Read PersistedActivePreset back at on_init and republish the
+        outputs so the visualisation shows the last-known preset
+        immediately, before any SOAP poll or NOTIFY arrives. Bad / empty
+        / missing stores leave the defaults in place."""
+        try:
+            raw = store["PersistedActivePreset"].value
+        except Exception:
+            return
+        if isinstance(raw, bytes):
+            try:
+                raw = raw.decode("iso-8859-15", errors="replace")
+            except Exception:
+                return
+        if not raw:
+            return
+        try:
+            data = json.loads(raw)
+        except (ValueError, TypeError):
+            return
+        if not isinstance(data, dict):
+            return
+        try:
+            idx = int(data.get("idx") or 0)
+        except (TypeError, ValueError):
+            idx = 0
+        name = data.get("name") or ""
+        if not isinstance(name, str):
+            return
+        if idx <= 0 and not name:
+            return
+        self._active_station = idx
+        self._active_station_name = name
+        # Publish via the same path a fresh dispatch uses so marquee /
+        # SBC bookkeeping stays consistent.
+        self.fw.set_output("ActiveStation", float(idx))
+        self._publish_text("ActiveStationName", name)
 
     def _mark_active_station_loading(self, idx, name):
         """Optimistic in-flight update for the ActiveStationName output.

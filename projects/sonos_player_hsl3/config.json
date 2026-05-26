@@ -63,7 +63,9 @@
       { "type": "string", "identifier": "LastError",     "init_value": "", "label": "Last Error" },
       { "type": "number", "identifier": "Subscribed",    "init_value": 0,  "label": "UPnP Subscribed" }
     ],
-    "stores": [],
+    "stores": [
+      { "type": "string", "identifier": "PersistedActivePreset", "init_value": "" }
+    ],
     "timers": [
       { "identifier": "Tick" },
       { "identifier": "Marquee" }
